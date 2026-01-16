@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<AcquirerRoutingConfiguration>
+  <Acquirers>
+    <Acquirer>
+      <AcquirerCode>888899</AcquirerCode>
+      <AcquirerID>Techcombank</AcquirerID>
+      <Host>10.0.2.100</Host>
+      <Port>8001</Port>
+      <Timeout>30000</Timeout>
+      <MaxConnections>10</MaxConnections>
+    </Acquirer>
+    <Acquirer>
+      <AcquirerCode>970422</AcquirerCode>
+      <AcquirerID>MB Bank</AcquirerID>
+      <Host>10.0.2.101</Host>
+      <Port>8002</Port>
+      <Timeout>30000</Timeout>
+      <MaxConnections>10</MaxConnections>
+    </Acquirer>
+    <Acquirer>
+      <AcquirerCode>970436</AcquirerCode>
+      <AcquirerID>Vietcombank</AcquirerID>
+      <Host>10.0.2.102</Host>
+      <Port>8003</Port>
+      <Timeout>30000</Timeout>
+      <MaxConnections>10</MaxConnections>
+    </Acquirer>
+  </Acquirers>
+</AcquirerRoutingConfiguration>

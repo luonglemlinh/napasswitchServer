@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>router</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\NapasSwitch.Core\NapasSwitch.Core.csproj" />
+    <ProjectReference Include="..\NapasSwitch.Network\NapasSwitch.Network.csproj" />
+  </ItemGroup>
+
+</Project>

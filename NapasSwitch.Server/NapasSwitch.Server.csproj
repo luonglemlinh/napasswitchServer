@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>server</RootNamespace>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Components\NapasSwitch.Core\NapasSwitch.Core.csproj" />
+    <ProjectReference Include="..\Components\NapasSwitch.Data\NapasSwitch.Data.csproj" />
+    <ProjectReference Include="..\Components\NapasSwitch.Network\NapasSwitch.Network.csproj" />
+    <ProjectReference Include="..\Components\NapasSwitchRouter\NapasSwitchRouter.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
+  </ItemGroup>
+
+</Project>

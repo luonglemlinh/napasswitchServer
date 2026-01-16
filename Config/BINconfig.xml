@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<BinRoutingConfiguration>
+  <Banks>
+    <Bank>
+      <BankCode>TCB</BankCode>
+      <BankName>Techcombank</BankName>
+      <IssuerCode>TCB</IssuerCode>
+      <IssuerName>Techcombank</IssuerName>
+      <Host>127.0.0.1</Host>
+      <Port>7001</Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>889988</Bin>
+        <Bin>970407</Bin>
+      </Bins>
+    </Bank>
+    <Bank>
+      <BankCode>MB</BankCode>
+      <BankName>MB Bank</BankName>
+      <IssuerCode>MB</IssuerCode>
+      <IssuerName>MB Bank</IssuerName>
+      <Host>127.0.0.1</Host>
+      <Port>7002</Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>970422</Bin>
+      </Bins>
+    </Bank>
+    <Bank>
+      <BankCode>VCB</BankCode>
+      <BankName>Vietcombank</BankName>
+      <IssuerCode>VCB</IssuerCode>
+      <IssuerName>Vietcombank</IssuerName>
+      <Host>127.0.0.1</Host>
+      <Port>7003</Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>686868</Bin>
+        <Bin>970436</Bin>
+      </Bins>
+    </Bank>
+  </Banks>
+</BinRoutingConfiguration>

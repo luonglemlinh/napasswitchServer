@@ -1,0 +1,549 @@
+<?xml version="1.0" encoding="utf-8"?>
+<NapasValidationConfiguration>
+  <DataElements>
+    <!-- DE#2: -->
+    <DataElement Number="2" Name="DE2_PAN" Description="Primary Account Number (PAN)">
+      <MinLength>9</MinLength>
+      <MaxLength>19</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{9,19}$</Pattern>
+      <RequiredIn>0200,0210,0400,0410,0420,0430</RequiredIn>
+      <ErrorCode>14</ErrorCode>
+      <ErrorMessage>Invalid card number - PAN must be 9-19 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#3:-->
+    <DataElement Number="3" Name="DE3_ProcessingCode" Description="Processing Code">
+      <MinLength>6</MinLength>
+      <MaxLength>6</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{6}$</Pattern>
+      <RequiredIn>0200,0210,0400,0410,0420,0430</RequiredIn>
+      <ErrorCode>40</ErrorCode>
+      <ErrorMessage>Invalid processing code - must be 6 numeric digits</ErrorMessage>
+      <AllowedValues>
+        <Value>000000</Value> <!-- Purchase -->
+        <Value>010000</Value> <!-- Cash Withdrawal -->
+        <Value>020000</Value> <!-- Adjustment/Void -->
+        <Value>090000</Value> <!-- Cash Deposit -->
+        <Value>300000</Value> <!-- Balance Inquiry -->
+      </AllowedValues>
+    </DataElement>
+
+    <!-- DE#4: Transaction Amount-->
+    <DataElement Number="4" Name="DE4_Amount" Description="Transaction amount">
+      <MinLength>12</MinLength>
+      <MaxLength>12</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{12}$</Pattern>
+      <RequiredIn>0200,0210,0400,0410</RequiredIn>
+      <ErrorCode>13</ErrorCode>
+      <ErrorMessage>Invalid amount - must be 12 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#7: Transmission Date and Time -->
+    <DataElement Number="7" Name="DE7_TransmissionDateTime" Description="MMDDhhmmss format">
+      <MinLength>10</MinLength>
+      <MaxLength>10</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[0-9]|1[0-9]|2[0-3])[0-5][0-9][0-5][0-9]$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid transmission date/time - format MMDDhhmmss</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#9 -->
+    <DataElement Number="9" Name="" Description="">
+      <MinLength>8</MinLength>
+      <MaxLength>8</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{8}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid settlement conversion rate - must be 8 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#10 -->
+    <DataElement Number="10" Name="" Description="">
+      <MinLength>8</MinLength>
+      <MaxLength>8</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{8}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid billing conversion rate - must be 8 numeric digits</ErrorMessage>
+    </DataElement>                                                                                                                                                          
+
+    <!-- DE#11 -->
+    <DataElement Number="11" Name="DE11_STAN" Description="System Trace Audit Number">
+      <MinLength>6</MinLength>
+      <MaxLength>6</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{6}$</Pattern>
+      <RequiredIn>0200,0210,0400,0410,0420,0430,0800,0810</RequiredIn>
+      <ErrorCode>96</ErrorCode>
+      <ErrorMessage>Invalid STAN - must be 6 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#12 -->
+    <DataElement Number="12" Name="DE12_LocalTime" Description="hhmmss format">
+      <MinLength>6</MinLength>
+      <MaxLength>6</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^(0[0-9]|1[0-9]|2[0-3])[0-5][0-9][0-5][0-9]$</Pattern>
+      <RequiredIn>0200,0210,0400,0410,0420,0430</RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid local time - format hhmmss</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#13 -->
+    <DataElement Number="13" Name="DE13_LocalDate" Description="MMDD format">
+      <MinLength>4</MinLength>
+      <MaxLength>4</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])$</Pattern>
+      <RequiredIn>0200,0210,0400,0410,0420,0430</RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid local date - format MMDD</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#14 -->
+    <DataElement Number="14" Name="" Description="">
+      <MinLength>4</MinLength>
+      <MaxLength>4</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{4}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>54</ErrorCode>
+      <ErrorMessage>Invalid expiration date - must be YYMM</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#15 -->
+    <DataElement Number="15" Name="DE15_SettlementDate" Description="MMDD format">
+      <MinLength>4</MinLength>
+      <MaxLength>4</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{4}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid settlement date - format MMDD</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#18 -->
+    <DataElement Number="18" Name="DE18_MerchantType" Description="Merchant Category Code">
+      <MinLength>4</MinLength>
+      <MaxLength>4</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{4}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid merchant type - must be 4 digits MCC</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#19 -->
+    <DataElement Number="19" Name="" Description="">
+      <MinLength>3</MinLength>
+      <MaxLength>3</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{3}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid acquiring country code - must be 3 digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#22 -->
+    <DataElement Number="22" Name="DE22_POSEntryMode" Description="POS entry mode code">
+      <MinLength>3</MinLength>
+      <MaxLength>3</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{3}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid POS entry mode - must be 3 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#23 -->
+    <DataElement Number="23" Name="" Description="">
+      <MinLength>3</MinLength>
+      <MaxLength>3</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{3}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid card sequence number - must be 3 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#25 -->
+    <DataElement Number="25" Name="DE25_POSConditionCode" Description="POS condition code">
+      <MinLength>2</MinLength>
+      <MaxLength>2</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{2}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid POS condition code - must be 2 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#32 -->
+    <DataElement Number="32" Name="DE32_AcquirerID" Description="Acquiring institution identification code">
+      <MinLength>6</MinLength>
+      <MaxLength>11</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{6,11}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>03</ErrorCode>
+      <ErrorMessage>Invalid acquirer ID - must be 6-11 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#33 -->
+    <DataElement Number="33" Name="DE33_ForwardingInstitutionID" Description="Forwarding/Issuer institution identification">
+      <MinLength>6</MinLength>
+      <MaxLength>11</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{6,11}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>15</ErrorCode>
+      <ErrorMessage>Invalid forwarding institution ID - must be 6-11 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#35 -->
+    <DataElement Number="35" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>37</MaxLength>
+      <DataType>Z</DataType>
+      <Pattern>^[0-9D]{1,37}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid Track 2 data</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#36 -->
+    <DataElement Number="36" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>104</MaxLength>
+      <DataType>Z</DataType>
+      <Pattern>^[0-9]{1,104}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid Track 3 data</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#37 -->
+    <DataElement Number="37" Name="DE37_RRN" Description="Retrieval reference number">
+      <MinLength>12</MinLength>
+      <MaxLength>12</MaxLength>
+      <DataType>AN</DataType>
+      <Pattern>^[a-zA-Z0-9]{12}$</Pattern>
+      <RequiredIn>0210,0410,0430</RequiredIn>
+      <ErrorCode>96</ErrorCode>
+      <ErrorMessage>Invalid RRN - must be 12 alphanumeric characters</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#38 -->
+    <DataElement Number="38" Name="DE38_AuthorizationID" Description="Authorization identification response">
+      <MinLength>6</MinLength>
+      <MaxLength>6</MaxLength>
+      <DataType>AN</DataType>
+      <Pattern>^[a-zA-Z0-9]{6}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>96</ErrorCode>
+      <ErrorMessage>Invalid authorization ID - must be 6 alphanumeric characters</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#39 -->
+    <DataElement Number="39" Name="DE39_ResponseCode" Description="Response code">
+      <MinLength>2</MinLength>
+      <MaxLength>2</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{2}$</Pattern>
+      <RequiredIn>0210,0410,0430,0810</RequiredIn>
+      <ErrorCode>96</ErrorCode>
+      <ErrorMessage>Invalid response code - must be 2 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#41 -->
+    <DataElement Number="41" Name="DE41_TerminalID" Description="Card acceptor terminal identification">
+      <MinLength>8</MinLength>
+      <MaxLength>8</MaxLength>
+      <DataType>AN</DataType>
+      <Pattern>^[a-zA-Z0-9]{8}$</Pattern>
+      <RequiredIn>0200,0210,0400,0410,0420,0430</RequiredIn>
+      <ErrorCode>03</ErrorCode>
+      <ErrorMessage>Invalid terminal ID - must be 8 alphanumeric characters</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#42 -->
+    <DataElement Number="42" Name="DE42_MerchantID" Description="Card acceptor identification code">
+      <MinLength>15</MinLength>
+      <MaxLength>15</MaxLength>
+      <DataType>AN</DataType>
+      <Pattern>^[a-zA-Z0-9\s]{15}$</Pattern>
+      <RequiredIn>0200,0210,0400,0410,0420,0430</RequiredIn>
+      <ErrorCode>03</ErrorCode>
+      <ErrorMessage>Invalid merchant ID - must be 15 alphanumeric characters</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#43 -->
+    <DataElement Number="43" Name="DE43_CardAcceptorNameLocation" Description="Card acceptor name and location">
+      <MinLength>1</MinLength>
+      <MaxLength>40</MaxLength>
+      <DataType>ANS</DataType>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid card acceptor name/location - max 40 characters</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#45 -->
+    <DataElement Number="45" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>79</MaxLength>
+      <DataType>ANS</DataType>
+      <Pattern>^[ -~]{1,79}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid Track 1 data</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#48 -->
+    <DataElement Number="48" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>999</MaxLength>
+      <DataType>ANS</DataType>
+      <Pattern></Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid additional private data</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#49 -->
+    <DataElement Number="49" Name="DE49_CurrencyCode" Description="Transaction currency code ISO 4217">
+      <MinLength>3</MinLength>
+      <MaxLength>3</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{3}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid currency code - must be 3 numeric digits</ErrorMessage>
+      <AllowedValues>
+        <Value>704</Value> <!-- VND -->
+      </AllowedValues>
+    </DataElement>
+
+    <!-- DE#50 -->
+    <DataElement Number="50" Name="" Description="">
+      <MinLength>3</MinLength>
+      <MaxLength>3</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{3}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid settlement currency code - must be 3 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#51 -->
+    <DataElement Number="51" Name="" Description="">
+      <MinLength>3</MinLength>
+      <MaxLength>3</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{3}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid billing currency code - must be 3 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#52 -->
+    <DataElement Number="52" Name="DE52_PINBlock" Description="Personal identification number data">
+      <MinLength>16</MinLength>
+      <MaxLength>16</MaxLength>
+      <DataType>B</DataType>
+      <Pattern>^[0-9A-F]{16}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>55</ErrorCode>
+      <ErrorMessage>Invalid PIN block - must be 16 hexadecimal characters</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#54 -->
+    <DataElement Number="54" Name="DE54_AdditionalAmounts" Description="Additional amounts">
+      <MinLength>1</MinLength>
+      <MaxLength>120</MaxLength>
+      <DataType>ANS</DataType>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid additional amounts format</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#55 -->
+    <DataElement Number="55" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>255</MaxLength>
+      <DataType>B</DataType>
+      <Pattern>^[0-9A-F]{1,255}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid ICC data</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#60 -->
+    <DataElement Number="60" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>60</MaxLength>
+      <DataType>ANS</DataType>
+      <Pattern></Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid DE60 data</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#62 -->
+    <DataElement Number="62" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>10</MaxLength>
+      <DataType>ANS</DataType>
+      <Pattern></Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid service code</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#63 -->
+    <DataElement Number="63" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>16</MaxLength>
+      <DataType>ANS</DataType>
+      <Pattern></Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid transaction reference number</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#70 -->
+    <DataElement Number="70" Name="" Description="">
+      <MinLength>3</MinLength>
+      <MaxLength>3</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{3}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid network management information code</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#90 -->
+    <DataElement Number="90" Name="DE90_OriginalDataElements" Description="Original data elements for reversals">
+      <MinLength>42</MinLength>
+      <MaxLength>42</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{42}$</Pattern>
+      <RequiredIn>0400,0420</RequiredIn>
+      <ErrorCode>96</ErrorCode>
+      <ErrorMessage>Invalid original data elements - must be 42 numeric digits</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#95 -->
+    <DataElement Number="95" Name="DE95_ReplacementAmounts" Description="Replacement amounts">
+      <MinLength>42</MinLength>
+      <MaxLength>42</MaxLength>
+      <DataType>AN</DataType>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid replacement amounts format</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#100 -->
+    <DataElement Number="100" Name="DE100_ReceivingInstitutionID" Description="Receiving institution identification code">
+      <MinLength>6</MinLength>
+      <MaxLength>11</MaxLength>
+      <DataType>N</DataType>
+      <Pattern>^[0-9]{6,11}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>15</ErrorCode>
+      <ErrorMessage>Invalid receiving institution ID</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#102 -->
+    <DataElement Number="102" Name="DE102_AccountID1" Description="From Account Identification">
+      <MinLength>1</MinLength>
+      <MaxLength>28</MaxLength>
+      <DataType>ANS</DataType>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>14</ErrorCode>
+      <ErrorMessage>Invalid account identification 1</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#103 -->
+    <DataElement Number="103" Name="DE103_AccountID2" Description="To Account Identification">
+      <MinLength>1</MinLength>
+      <MaxLength>28</MaxLength>
+      <DataType>ANS</DataType>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>14</ErrorCode>
+      <ErrorMessage>Invalid account identification 2</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#104 -->
+    <DataElement Number="104" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>210</MaxLength>
+      <DataType>ANS</DataType>
+      <Pattern></Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid content transfer</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#105 -->
+    <DataElement Number="105" Name="" Description="">
+      <MinLength>1</MinLength>
+      <MaxLength>999</MaxLength>
+      <DataType>ANS</DataType>
+      <Pattern></Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>55</ErrorCode>
+      <ErrorMessage>Invalid new PIN block</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#120 -->
+    <DataElement Number="120" Name="DE120_RecordData" Description="Record data (private use)">
+      <MinLength>1</MinLength>
+      <MaxLength>999</MaxLength>
+      <DataType>ANS</DataType>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>96</ErrorCode>
+      <ErrorMessage>Invalid record data</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#123 -->
+    <DataElement Number="123" Name="DE123_POSDataCode" Description="POS data code">
+      <MinLength>15</MinLength>
+      <MaxLength>15</MaxLength>
+      <DataType>AN</DataType>
+      <Pattern>^[a-zA-Z0-9]{15}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid POS data code</ErrorMessage>
+    </DataElement>
+
+    <!-- DE#128 -->
+    <DataElement Number="128" Name="" Description="">
+      <MinLength>16</MinLength>
+      <MaxLength>16</MaxLength>
+      <DataType>AN</DataType>
+      <Pattern>^[a-zA-Z0-9]{16}$</Pattern>
+      <RequiredIn></RequiredIn>
+      <ErrorCode>30</ErrorCode>
+      <ErrorMessage>Invalid MAC</ErrorMessage>
+    </DataElement>
+  </DataElements>
+
+  <!-- MTIs -->
+  <MessageTypes>
+    <MTI Code="0200" Description="Authorization Request (Financial)"/>
+    <MTI Code="0210" Description="Authorization Response (Financial)"/>
+    <MTI Code="0400" Description="Reversal Request"/>
+    <MTI Code="0410" Description="Reversal Response"/>
+    <MTI Code="0420" Description="Reversal Advice"/>
+    <MTI Code="0430" Description="Reversal Advice Response"/>
+    <MTI Code="0800" Description="Network Management Request"/>
+    <MTI Code="0810" Description="Network Management Response"/>
+  </MessageTypes>
+
+</NapasValidationConfiguration>

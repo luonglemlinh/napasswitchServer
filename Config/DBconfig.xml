@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<DatabaseConfiguration>
+    <ConnectionString>Server=localhost;Database=NAPASSwitch;Integrated Security=true;</ConnectionString>
+    <EnableLogging>true</EnableLogging>
+    <CommandTimeout>30</CommandTimeout>
+</DatabaseConfiguration>
