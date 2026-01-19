@@ -7,10 +7,10 @@ using core.Models.Configuration;
 
 namespace core.Configuration
 {
-    /// <summary>
+    
     /// Loads and manages all XML configuration files for the switch
     /// This is a Singleton - only one instance exists throughout the application
-    /// </summary>
+    
     public class ConfigurationLoader
     {
         private static ConfigurationLoader? _instance;
@@ -29,9 +29,9 @@ namespace core.Configuration
 
         private ConfigurationLoader() { }
 
-        /// <summary>
+        
         /// Get the single instance of ConfigurationLoader
-        /// </summary>
+        
         public static ConfigurationLoader Instance
         {
             get
@@ -48,9 +48,9 @@ namespace core.Configuration
             }
         }
 
-        /// <summary>
+        
         /// Load all configuration files from the Config directory at solution root
-        /// </summary>
+        
         public void LoadConfigurations(string configDirectory)
         {
             if (!Directory.Exists(configDirectory))
@@ -92,10 +92,10 @@ namespace core.Configuration
             Console.WriteLine("[CONFIG] All configurations loaded successfully!\n");
         }
 
-        /// <summary>
+        
         /// Convenience method: Auto-detect config path relative to application
         /// Useful for development - looks for Config folder at solution root
-        /// </summary>
+        
         public void LoadConfigurationsAuto()
         {
             // Try to find Config folder by going up from bin directory
@@ -119,9 +119,9 @@ namespace core.Configuration
                 "Could not find Config directory. Please call LoadConfigurations() with explicit path.");
         }
 
-        /// <summary>
+        
         /// Generic method to load any XML config file
-        /// </summary>
+        
         private T LoadXmlConfig<T>(string filePath) where T : class
         {
             if (!File.Exists(filePath))

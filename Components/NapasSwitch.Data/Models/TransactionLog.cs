@@ -2,10 +2,10 @@
 
 namespace data.Models
 {
-    /// <summary>
+    
     /// Database entity for storing transaction logs
     /// Every transaction that passes through the switch is recorded here
-    /// </summary>
+    
     public class TransactionLog
     {
         public long Id { get; set; }
@@ -24,9 +24,9 @@ namespace data.Models
         public DateTime LoggedAt { get; set; } = DateTime.Now;
         public int ProcessingTimeMs { get; set; }
         
-        /// <summary>
+        
         /// Direction: INBOUND (from ACQ), OUTBOUND (to ISS), RESPONSE (from ISS)
-        /// </summary>
+        
         public string Direction { get; set; } = string.Empty;
     }
 }

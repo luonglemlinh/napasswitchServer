@@ -7,10 +7,10 @@ using System.Text;
 
 namespace core.ISO8583;
 
-/// <summary>
+
 /// Parses ISO 8583 messages into IsoMessage objects
 /// Supports expandable field schema
-/// </summary>
+
 public class IsoParser
 {
     private readonly IsoSchema _schema;
@@ -20,19 +20,19 @@ public class IsoParser
         _schema = schema ?? IsoSchema.GetNapasSchema();
     }
 
-    /// <summary>
+    
     /// Parse ISO message from hex string
     /// Example: "0200F23C048108A18000000000040000000..." 
-    /// </summary>
+    
     public IsoMessage Parse(string hexMessage)
     {
         var bytes = HexStringToBytes(hexMessage);
         return Parse(bytes);
     }
 
-    /// <summary>
+    
     /// Parse ISO message from byte array
-    /// </summary>
+    
     public IsoMessage Parse(byte[] messageBytes)
     {
         if (messageBytes.Length < 4)
@@ -63,10 +63,10 @@ public class IsoParser
         return msgType;
     }
 
-    /// <summary>
+    
     /// Parse bitmap (8 bytes = 64 fields)
     /// If bit 1 is set, secondary bitmap follows (additional 8 bytes for fields 65-128)
-    /// </summary>
+    
     private bool[] ParseBitmap(byte[] data, ref int offset)
     {
         var bitmap = new bool[128]; // Support up to 128 fields
@@ -102,9 +102,9 @@ public class IsoParser
         return bitmap;
     }
 
-    /// <summary>
+    
     /// Extract field values based on bitmap and schema
-    /// </summary>
+    
     private Dictionary<int, string> ExtractFields(byte[] data, bool[] bitmap, ref int offset)
     {
         var fields = new Dictionary<int, string>();
@@ -125,9 +125,9 @@ public class IsoParser
         return fields;
     }
 
-    /// <summary>
+    
     /// Extract a single field value based on its definition
-    /// </summary>
+    
     private string ExtractFieldValue(byte[] data, IsoFieldDefinition fieldDef, ref int offset)
     {
         return fieldDef.Type switch

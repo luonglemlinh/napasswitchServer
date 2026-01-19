@@ -19,4 +19,35 @@
     <PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
   </ItemGroup>
 
+  <ItemGroup>
+    <None Include="..\Config\NapasValidationConfig.xml">
+      <Link>Config\NapasValidationConfig.xml</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+	  <None Include="..\Config\BINconfig.xml">
+      <Link>Config\BINconfig.xml</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\Config\ACQconfig.xml">
+      <Link>Config\ACQconfig.xml</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\Config\RCconfig.xml">
+      <Link>Config\RCconfig.xml</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="..\Config\DBconfig.xml">
+      <Link>Config\DBconfig.xml</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+  </ItemGroup>
+
 </Project>

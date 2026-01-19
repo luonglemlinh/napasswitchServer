@@ -2,9 +2,9 @@ using System.Xml.Serialization;
 
 namespace core.Models.Configuration
 {
-    /// <summary>
+    
     /// Database configuration loaded from DBconfig.xml
-    /// </summary>
+    
     [XmlRoot("DatabaseConfiguration")]
     public class DatabaseConfiguration
     {
