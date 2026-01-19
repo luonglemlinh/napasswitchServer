@@ -13,12 +13,6 @@ Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NapasSwitchRouter", "Compon
 EndProject
 Project("{9A19103F-16F7-4668-BE54-9A1E7A4F7556}") = "NapasSwitch.Data", "Components\NapasSwitch.Data\NapasSwitch.Data.csproj", "{E5555555-5555-5555-5555-555555555555}"
 EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "TestClient", "TestClient", "{33F1C183-10D1-AEBA-6B45-88B13AADF6E0}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "NapasSwitch.TestClient", "TestClient\NapasSwitch.TestClient.csproj", "{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}"
-EndProject
-Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Components", "Components", "{F30895DC-C3AC-FF44-FFF8-D51D98AE1B61}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -89,23 +83,8 @@ Global
 		{E5555555-5555-5555-5555-555555555555}.Release|x64.Build.0 = Release|Any CPU
 		{E5555555-5555-5555-5555-555555555555}.Release|x86.ActiveCfg = Release|Any CPU
 		{E5555555-5555-5555-5555-555555555555}.Release|x86.Build.0 = Release|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Debug|Any CPU.Build.0 = Debug|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Debug|x64.ActiveCfg = Debug|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Debug|x64.Build.0 = Debug|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Debug|x86.ActiveCfg = Debug|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Debug|x86.Build.0 = Debug|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Release|Any CPU.ActiveCfg = Release|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Release|Any CPU.Build.0 = Release|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Release|x64.ActiveCfg = Release|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Release|x64.Build.0 = Release|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Release|x86.ActiveCfg = Release|Any CPU
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
-	EndGlobalSection
-	GlobalSection(NestedProjects) = preSolution
-		{F9B54940-623E-478A-8AA0-BE5DDF4A60E1} = {33F1C183-10D1-AEBA-6B45-88B13AADF6E0}
 	EndGlobalSection
 EndGlobal

@@ -6,9 +6,11 @@ using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Threading;
+using System.Threading.Tasks;
 using core.Configuration;
 using core.Models;
 using core.ISO8583;
+using core.Security;
 using network.Validation;
 using router;
 using data;
@@ -16,17 +18,21 @@ using System.Data.SqlClient;
 
 namespace server
 {
-    
     /// Multi-threaded TCP server that listens for incoming ISO-8583 messages
     
-    public class TcpSwitchServer
+    public class TcpSwitchServer : IDisposable
     {
         private TcpListener? _listener;
         private bool _isRunning;
         private readonly int _port;
         private readonly IsoParser _parser;
         private readonly IssuerConnector _issuerConnector;
-        private readonly TransactionLogger? _transactionLogger; 
+        private readonly TransactionLogger? _transactionLogger;
+        private readonly TransactionStateMachine _stateMachine;
+        private readonly SecureDataHandler _securityProvider;
+        private bool _disposed;
+        private Timer? _statsTimer;
+        private Timer? _poolHealthTimer;
 
         // Thread-safe collection to track active connections
         // ConcurrentDictionary = multiple threads can access it safely!
@@ -40,22 +46,80 @@ namespace server
             _parser = new IsoParser();
             _issuerConnector = new IssuerConnector();
             _activeSessions = new ConcurrentDictionary<string, ClientSession>();
+            _stateMachine = new TransactionStateMachine(transactionTimeoutSeconds: 30);
+            _securityProvider = new SecureDataHandler(new SoftwareHsmStub());
             
-            // Initialize NAPAS validator
-            string configPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config", "NapasValidationConfig.xml");
+            _stateMachine.OnTransactionTimeout += OnTransactionTimeout;
+            _stateMachine.OnReversalRequired += OnReversalRequired;
+            
+            string configPath = FindValidationConfigPath();
             _validator = new NapasDataElementValidator(configPath);
             
             // Initialize transaction logger
             if (enableLogging && !string.IsNullOrEmpty(dbConnectionString))
             {
                 _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging);
-                Console.WriteLine("[INIT] Transaction logger initialized");
+                Console.WriteLine("[INIT] Transaction logger initialized with circuit breaker");
             }
             else
             {
                 _transactionLogger = null;
                 Console.WriteLine("[INIT] Transaction logger disabled");
             }
+
+            StartBackgroundMonitoring();
+        }
+        
+        private string FindValidationConfigPath()
+        {
+            var searchPaths = new[]
+            {
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config", "NapasValidationConfig.xml"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "Config", "NapasValidationConfig.xml"),
+            };
+            
+            foreach (var path in searchPaths)
+            {
+                var fullPath = Path.GetFullPath(path);
+                if (File.Exists(fullPath))
+                {
+                    Console.WriteLine($"[INIT] Found validation config at: {fullPath}");
+                    return fullPath;
+                }
+            }
+            
+            throw new FileNotFoundException(
+                "NAPAS validation configuration file not found. Searched paths:\n" + 
+                string.Join("\n", searchPaths.Select(p => $"  - {Path.GetFullPath(p)}")));
+        }
+        
+        private void StartBackgroundMonitoring()
+        {
+            _statsTimer = new Timer(LogServerStats, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+            _poolHealthTimer = new Timer(LogPoolHealth, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+            Console.WriteLine("[MONITORING] Background stats logging enabled (every 30s)");
+        }
+        
+        private void LogServerStats(object? state)
+        {
+            var stats = GetStats();
+            Console.WriteLine($"[STATS] Active: {stats.ActiveConnections} | Total Msgs: {stats.TotalMessageCount}");
+        }
+        
+        private void LogPoolHealth(object? state)
+        {
+            var poolStats = _issuerConnector.GetPoolStats();
+            Console.WriteLine($"[POOL] Total: {poolStats.TotalPooledConnections} | Active: {poolStats.TotalActivedConnections} | Pools: {poolStats.PoolCount}");
+        }
+        
+        private void OnTransactionTimeout(TransactionContext context)
+        {
+            Console.WriteLine($"[TIMEOUT] Transaction {context.TransactionId} timed out after {context.GetProcessingTime()?.TotalMilliseconds}ms");
+        }
+        
+        private void OnReversalRequired(TransactionContext context)
+        {
+            Console.WriteLine($"[REVERSAL] Auto-reversal required for transaction {context.TransactionId}");
         }
 
         
@@ -210,63 +274,80 @@ namespace server
         private byte[]? ProcessMessage(byte[] messageBytes, string sessionId)
         {
             var stopwatch = Stopwatch.StartNew();
+            TransactionContext? txnContext = null;
             
             try
             {
-                // Step 1: Parse ISO-8583 message
                 IsoMessage request = _parser.Parse(messageBytes);
+                
+                string txnId = $"{request.GetField(11)}_{DateTime.UtcNow.Ticks}";
+                txnContext = _stateMachine.CreateTransaction(sessionId, request);
 
-                // Step 2: VALIDATE REQUEST according to NAPAS specs
                 var validationResult = _validator.ValidateMessage(request);
                 if (!validationResult.IsValid)
                 {
                     Console.WriteLine($" [{sessionId}] VALIDATION FAILED:");
                     Console.WriteLine(validationResult.GetSummary());
                     
-                    // Return error response
+                    txnContext.TryTransitionTo(TransactionState.ValidationFailed, 
+                        validationResult.GetFirstErrorCode(), 
+                        "Message validation failed");
+                    
                     var errorResponse = CreateErrorResponse(request, validationResult.GetFirstErrorCode());
                     return _parser.Build(errorResponse);
                 }
                 
+                txnContext.TryTransitionTo(TransactionState.Validated);
+                
                 Console.WriteLine($" [{sessionId}] Validation PASSED");
                 Console.WriteLine($" [{sessionId}] Message Details:");
                 Console.WriteLine($"   MTI: {request.MessageType}");
-                Console.WriteLine($"   DE2 (PAN): {MaskPAN(request.GetField(2))}");
+                Console.WriteLine($"   DE2 (PAN): {SecureDataHandler.MaskPAN(request.GetField(2))}");
                 Console.WriteLine($"   DE3 (Proc Code): {request.GetField(3)}");
                 Console.WriteLine($"   DE4 (Amount): {request.GetField(4)}");
                 Console.WriteLine($"   DE11 (STAN): {request.GetField(11)}");
 
-                // Log inbound request
+                string? clearPan = request.GetField(2);
+                string? encryptedPan = null;
+                if (!string.IsNullOrEmpty(clearPan))
+                {
+                    encryptedPan = _securityProvider.EncryptPAN(clearPan);
+                    request.SetField(2, encryptedPan);
+                }
+
                 if (_transactionLogger != null)
                 {
                     _ = _transactionLogger.LogRequestAsync(request, sessionId, "INBOUND");
                 }
 
-                // Step 3: Route based on message type
+                if (!string.IsNullOrEmpty(encryptedPan) && !string.IsNullOrEmpty(clearPan))
+                {
+                    request.SetField(2, clearPan);
+                }
+
                 IsoMessage response = request.MessageType switch
                 {
-                    "0200" => HandleAuthorizationRequest(request, sessionId),
-                    "0400" => HandleReversalRequest(request, sessionId),
+                    "0200" => HandleAuthorizationRequest(request, sessionId, txnContext),
+                    "0400" => HandleReversalRequest(request, sessionId, txnContext),
                     "0800" => HandleNetworkManagement(request, sessionId),
                     _ => CreateErrorResponse(request, "12")
                 };
 
-                // Step 4: VALIDATE RESPONSE before sending
+                txnContext.Response = response;
+                txnContext.TryTransitionTo(TransactionState.Completed);
+
                 var responseValidation = _validator.ValidateMessage(response);
                 if (!responseValidation.IsValid)
                 {
-                    Console.WriteLine($" [{sessionId}] WARNING: Response validation failed (fixing...):");
+                    Console.WriteLine($" [{sessionId}] WARNING: Response validation failed:");
                     Console.WriteLine(responseValidation.GetSummary());
-                    // In production, you might want to fix the response or reject it
                 }
 
-                // Step 5: Build response bytes
                 byte[] responseBytes = _parser.Build(response);
 
                 stopwatch.Stop();
                 int processingTimeMs = (int)stopwatch.ElapsedMilliseconds;
 
-                // Log complete transaction
                 if (_transactionLogger != null)
                 {
                     _ = _transactionLogger.LogTransactionAsync(request, response, sessionId, processingTimeMs, "COMPLETE");
@@ -281,38 +362,48 @@ namespace server
             {
                 stopwatch.Stop();
                 Console.WriteLine($" [{sessionId}] Processing error: {ex.Message}");
+                
+                if (txnContext != null)
+                {
+                    txnContext.TryTransitionTo(TransactionState.SystemError, "96", ex.Message);
+                }
+                
                 return null;
             }
         }
 
      
-        private IsoMessage HandleAuthorizationRequest(IsoMessage request, string sessionId)
+        private IsoMessage HandleAuthorizationRequest(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
-            // Get card BIN (first 6 digits) to determine routing
             string? cardBIN = request.GetCardBIN();
 
             if (string.IsNullOrEmpty(cardBIN))
             {
                 Console.WriteLine($"  [{sessionId}] No card BIN found");
-                return CreateErrorResponse(request, "14"); // Invalid card
+                txnContext.TryTransitionTo(TransactionState.ValidationFailed, "14", "Invalid card BIN");
+                return CreateErrorResponse(request, "14");
             }
 
-            // Find which Issuer bank to route to
             var issuerBank = ConfigurationLoader.Instance.GetIssuerByBIN(cardBIN);
 
             if (issuerBank == null)
             {
                 Console.WriteLine($"  [{sessionId}] No issuer found for BIN: {cardBIN}");
-                return CreateErrorResponse(request, "15"); // No such issuer
+                txnContext.TryTransitionTo(TransactionState.RoutingFailed, "15", "No such issuer");
+                return CreateErrorResponse(request, "15");
             }
 
             Console.WriteLine($" [{sessionId}] Routing to ISS: {issuerBank.IssuerName} ({issuerBank.IssuerCode})");
 
-            // Set the forwarding institution ID (Field 33)
             request.SetIssuerID(issuerBank.IssuerCode);
+            
+            txnContext.TryTransitionTo(TransactionState.RoutingToIssuer);
+            txnContext.SentToIssuerAt = DateTime.UtcNow;
 
-            // UPDATED: Actually forward to the ISS bank using IssuerConnector!
             IsoMessage response = _issuerConnector.ForwardToIssuer(request, issuerBank, sessionId);
+            
+            txnContext.ResponseReceivedAt = DateTime.UtcNow;
+            txnContext.TryTransitionTo(TransactionState.ResponseReceived);
 
             return response;
         }
@@ -320,27 +411,29 @@ namespace server
         
         /// Handle 0400 - Reversal Request (Void/Cancel)
         
-        private IsoMessage HandleReversalRequest(IsoMessage request, string sessionId)
+        private IsoMessage HandleReversalRequest(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
             Console.WriteLine($" [{sessionId}] Processing reversal request");
+            
+            txnContext.TryTransitionTo(TransactionState.ReversalPending);
 
-            // Similar routing logic to authorization
             string? cardBIN = request.GetCardBIN();
             var issuerBank = ConfigurationLoader.Instance.GetIssuerByBIN(cardBIN ?? "");
 
             if (issuerBank == null)
             {
                 Console.WriteLine($"  [{sessionId}] No issuer found");
+                txnContext.TryTransitionTo(TransactionState.ReversalFailed, "15", "No such issuer");
                 return CreateErrorResponse(request, "15");
             }
 
             Console.WriteLine($" [{sessionId}] Routing reversal to ISS: {issuerBank.IssuerName}");
 
-            // Set the forwarding institution ID (Field 33)
             request.SetIssuerID(issuerBank.IssuerCode);
 
-            // UPDATED: Actually forward to the ISS bank using IssuerConnector!
             IsoMessage response = _issuerConnector.ForwardToIssuer(request, issuerBank, sessionId);
+            
+            txnContext.TryTransitionTo(TransactionState.ReversalCompleted);
 
             return response;
         }
@@ -441,6 +534,25 @@ namespace server
                 TotalMessageCount = _activeSessions.Values.Sum(s => s.MessageCount),
                 UptimeSince = DateTime.Now // TODO: Track actual start time
             };
+        }
+
+        
+        /// Dispose resources
+        
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+
+            Stop();
+
+            _statsTimer?.Dispose();
+            _poolHealthTimer?.Dispose();
+            _issuerConnector?.Dispose();
+            _transactionLogger?.Dispose();
+            _stateMachine?.Dispose();
+            
+            Console.WriteLine("[DISPOSE] TcpSwitchServer disposed");
         }
     }
 
