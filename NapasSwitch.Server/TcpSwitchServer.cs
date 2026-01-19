@@ -16,10 +16,9 @@ using System.Data.SqlClient;
 
 namespace server
 {
-    /// <summary>
+    
     /// Multi-threaded TCP server that listens for incoming ISO-8583 messages
-    /// This is the "front door" of your NAPAS switch!
-    /// </summary>
+    
     public class TcpSwitchServer
     {
         private TcpListener? _listener;
@@ -59,9 +58,9 @@ namespace server
             }
         }
 
-        /// <summary>
+        
         /// Start the server and begin accepting connections
-        /// </summary>
+        
         public void Start()
         {
             _listener = new TcpListener(IPAddress.Any, _port);
@@ -99,10 +98,9 @@ namespace server
             }
         }
 
-        /// <summary>
+
         /// This method runs in a SEPARATE THREAD for each connected client!
-        /// Think: Each waiter handles their own table independently
-        /// </summary>
+
         private void HandleClient(object? obj)
         {
             if (obj is not TcpClient client) return;
@@ -205,10 +203,10 @@ namespace server
             }
         }
 
-        /// <summary>
+        
         /// Process an incoming ISO-8583 message
         /// This is where the routing magic happens!
-        /// </summary>
+        
         private byte[]? ProcessMessage(byte[] messageBytes, string sessionId)
         {
             var stopwatch = Stopwatch.StartNew();
@@ -319,9 +317,9 @@ namespace server
             return response;
         }
 
-        /// <summary>
+        
         /// Handle 0400 - Reversal Request (Void/Cancel)
-        /// </summary>
+        
         private IsoMessage HandleReversalRequest(IsoMessage request, string sessionId)
         {
             Console.WriteLine($" [{sessionId}] Processing reversal request");
@@ -347,9 +345,9 @@ namespace server
             return response;
         }
 
-        /// <summary>
+        
         /// Handle 0800 - Network Management (heartbeat, sign-on)
-        /// </summary>
+        
         private IsoMessage HandleNetworkManagement(IsoMessage request, string sessionId)
         {
             Console.WriteLine($" [{sessionId}] Network management message");
@@ -368,9 +366,9 @@ namespace server
             return response;
         }
 
-        /// <summary>
+        
         /// Create a successful response (0210 or 0410)
-        /// </summary>
+        
         private IsoMessage CreateSuccessResponse(IsoMessage request, bool isReversal = false)
         {
             var response = new IsoMessage
@@ -389,9 +387,9 @@ namespace server
             return response;
         }
 
-        /// <summary>
+        
         /// Create an error response with specific response code
-        /// </summary>
+        
         private IsoMessage CreateErrorResponse(IsoMessage request, string responseCode)
         {
             var response = new IsoMessage
@@ -411,9 +409,9 @@ namespace server
             return response;
         }
 
-        /// <summary>
+        
         /// Mask PAN for security (show first 6 and last 4 digits only)
-        /// </summary>
+        
         private string MaskPAN(string? pan)
         {
             if (string.IsNullOrEmpty(pan) || pan.Length < 10)
@@ -422,9 +420,9 @@ namespace server
             return $"{pan[..6]}****{pan[^4..]}";
         }
 
-        /// <summary>
+        
         /// Stop the server
-        /// </summary>
+        
         public void Stop()
         {
             _isRunning = false;
@@ -432,9 +430,9 @@ namespace server
             Console.WriteLine(" Server stopped");
         }
 
-        /// <summary>
+        
         /// Get current server statistics
-        /// </summary>
+        
         public ServerStats GetStats()
         {
             return new ServerStats
@@ -446,9 +444,9 @@ namespace server
         }
     }
 
-    /// <summary>
+    
     /// Tracks information about a connected client session
-    /// </summary>
+    
     public class ClientSession
     {
         public string SessionId { get; set; } = string.Empty;
@@ -458,9 +456,9 @@ namespace server
         public int MessageCount { get; set; }
     }
 
-    /// <summary>
+    
     /// Server statistics for monitoring
-    /// </summary>
+    
     public class ServerStats
     {
         public int ActiveConnections { get; set; }
