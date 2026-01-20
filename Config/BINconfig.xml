@@ -6,7 +6,7 @@
       <BankName>Techcombank</BankName>
       <IssuerCode>TCB</IssuerCode>
       <IssuerName>Techcombank</IssuerName>
-      <Host>127.0.0.1</Host>
+      <Host>10.145.54.122</Host>
       <Port>7001</Port>
       <Timeout>30000</Timeout>
       <Bins>
@@ -19,7 +19,7 @@
       <BankName>MB Bank</BankName>
       <IssuerCode>MB</IssuerCode>
       <IssuerName>MB Bank</IssuerName>
-      <Host>127.0.0.1</Host>
+      <Host>10.145.54.122</Host>
       <Port>7002</Port>
       <Timeout>30000</Timeout>
       <Bins>
@@ -27,12 +27,24 @@
       </Bins>
     </Bank>
     <Bank>
+      <BankCode>BIDV</BankCode>
+      <BankName>BIDV</BankName>
+      <IssuerCode>MB</IssuerCode>
+      <IssuerName>MB Bank</IssuerName>
+      <Host>10.145.54.122</Host>
+      <Port>7003</Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>970418</Bin>
+      </Bins>
+    </Bank>
+    <Bank>
       <BankCode>VCB</BankCode>
       <BankName>Vietcombank</BankName>
       <IssuerCode>VCB</IssuerCode>
       <IssuerName>Vietcombank</IssuerName>
-      <Host>127.0.0.1</Host>
-      <Port>7003</Port>
+      <Host>10.145.54.122</Host>
+      <Port>7004</Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>686868</Bin>

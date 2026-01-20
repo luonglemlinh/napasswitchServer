@@ -8,7 +8,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NapasSwitch.Core\NapasSwitch.Core.csproj" />
+    <ProjectReference Include="..\NapasSwitch.Data\NapasSwitch.Data.csproj" />
     <ProjectReference Include="..\NapasSwitch.Network\NapasSwitch.Network.csproj" />
   </ItemGroup>
 

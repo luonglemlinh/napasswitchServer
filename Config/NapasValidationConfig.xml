@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <NapasValidationConfiguration>
   <DataElements>
-    <!-- DE#2: -->
+    <!-- DE#2 -->
     <DataElement Number="2" Name="DE2_PAN" Description="Primary Account Number (PAN)">
       <MinLength>9</MinLength>
       <MaxLength>19</MaxLength>
@@ -12,7 +12,7 @@
       <ErrorMessage>Invalid card number - PAN must be 9-19 numeric digits</ErrorMessage>
     </DataElement>
 
-    <!-- DE#3:-->
+    <!-- DE#3-->
     <DataElement Number="3" Name="DE3_ProcessingCode" Description="Processing Code">
       <MinLength>6</MinLength>
       <MaxLength>6</MaxLength>
@@ -30,7 +30,7 @@
       </AllowedValues>
     </DataElement>
 
-    <!-- DE#4: Transaction Amount-->
+    <!-- DE#4 -->
     <DataElement Number="4" Name="DE4_Amount" Description="Transaction amount">
       <MinLength>12</MinLength>
       <MaxLength>12</MaxLength>
@@ -41,7 +41,7 @@
       <ErrorMessage>Invalid amount - must be 12 numeric digits</ErrorMessage>
     </DataElement>
 
-    <!-- DE#7: Transmission Date and Time -->
+    <!-- DE#7 -->
     <DataElement Number="7" Name="DE7_TransmissionDateTime" Description="MMDDhhmmss format">
       <MinLength>10</MinLength>
       <MaxLength>10</MaxLength>

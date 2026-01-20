@@ -210,37 +210,55 @@ namespace server
                 // Message processing loop - keep reading messages from this client
                 while (client.Connected && _isRunning)
                 {
-                    // Step 1: Read message length header (2 bytes, big-endian)
-                    byte[] lengthBytes = new byte[2];
-                    int bytesRead = stream.Read(lengthBytes, 0, 2);
-                    if (bytesRead == 0) break; // Client disconnected gracefully
+                    // Step 1: Read message length header
+                    // Default: 2-byte big-endian length.
+                    // Some clients use 4-byte big-endian length; we attempt a safe fallback if the 2-byte value is invalid.
+                    byte[] lengthBytes = ReadExactOrNull(stream, 2);
+                    if (lengthBytes == null) break; // Client disconnected
 
-                    // Convert 2 bytes to integer (big-endian format)
                     int messageLength = (lengthBytes[0] << 8) | lengthBytes[1];
+                    string lengthHex = BitConverter.ToString(lengthBytes);
 
-                    if (messageLength <= 0 || messageLength > 9999)
+                    const int maxPayloadLength = 65535;
+                    if (messageLength <= 0 || messageLength > maxPayloadLength)
                     {
-                        Console.WriteLine($"  [{sessionId}] Invalid message length: {messageLength}");
-                        break;
+                        // Fallback: treat the first 2 bytes as the high-order bytes of a 4-byte big-endian length.
+                        byte[] remainingLenBytes = ReadExactOrNull(stream, 2);
+                        if (remainingLenBytes == null) break;
+
+                        byte[] len4 = new byte[4]
+                        {
+                            lengthBytes[0],
+                            lengthBytes[1],
+                            remainingLenBytes[0],
+                            remainingLenBytes[1]
+                        };
+
+                        int len32 = (len4[0] << 24) | (len4[1] << 16) | (len4[2] << 8) | len4[3];
+                        string len4Hex = BitConverter.ToString(len4);
+
+                        // If 4-byte length is still invalid, close the connection to avoid desync.
+                        if (len32 <= 0 || len32 > maxPayloadLength)
+                        {
+                            Console.WriteLine($"  [{sessionId}] Invalid message length (2B={messageLength}, hex={lengthHex}; 4B={len32}, hex={len4Hex})");
+                            break;
+                        }
+
+                        messageLength = len32;
+                        Console.WriteLine($"  [{sessionId}] Detected 4-byte length header. len={messageLength}, hex={len4Hex}");
                     }
 
                     // Step 2: Read the actual ISO-8583 message
-                    byte[] messageBytes = new byte[messageLength];
-                    int totalRead = 0;
-                    while (totalRead < messageLength)
+                    byte[]? messageBytes = ReadExactOrNull(stream, messageLength);
+                    if (messageBytes == null)
                     {
-                        bytesRead = stream.Read(messageBytes, totalRead, messageLength - totalRead);
-                        if (bytesRead == 0) break; // Connection lost
-                        totalRead += bytesRead;
-                    }
-
-                    if (totalRead < messageLength)
-                    {
-                        Console.WriteLine($"  [{sessionId}] Incomplete message (expected {messageLength}, got {totalRead})");
+                        Console.WriteLine($"  [{sessionId}] Incomplete message (expected {messageLength} bytes)");
                         break;
                     }
 
                     Console.WriteLine($" [{sessionId}] Received {messageLength} bytes");
+
+                    PrintRawMessage(messageBytes, sessionId);
 
                     // Step 3: Process the message and get response
                     byte[]? responseBytes = ProcessMessage(messageBytes, sessionId);
@@ -280,6 +298,33 @@ namespace server
             }
         }
 
+        private static byte[]? ReadExactOrNull(NetworkStream stream, int length)
+        {
+            if (length <= 0) return Array.Empty<byte>();
+
+            byte[] buffer = new byte[length];
+            int totalRead = 0;
+            while (totalRead < length)
+            {
+                int read = stream.Read(buffer, totalRead, length - totalRead);
+                if (read <= 0) return null;
+                totalRead += read;
+            }
+
+            return buffer;
+        }
+
+        private static void PrintRawMessage(byte[] messageBytes, string sessionId)
+        {
+            Console.WriteLine($" [{sessionId}] Raw Message (HEX):");
+            string hexString = BitConverter.ToString(messageBytes).Replace("-", " ");
+            Console.WriteLine($"   {hexString}");
+
+            string asciiString = new string(messageBytes.Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
+            Console.WriteLine($" [{sessionId}] Raw Message (ASCII):");
+            Console.WriteLine($"   {asciiString}");
+        }
+
         
         /// Process an incoming ISO-8583 message
         /// This is where the routing magic happens!
@@ -298,8 +343,7 @@ namespace server
                 } catch (Exception ex) {
                     Console.WriteLine($"[{sessionId}] Parse error: {ex.Message}");
                     var resp = CreateErrorResponse(new IsoMessage { MessageType = "0200" }, "30");
-                    WriteResponse(stream, resp);
-                    continue;
+                    return _parser.Build(resp);
                 }
 
                 txnId = $"{request.GetField(11)}_{DateTime.UtcNow.Ticks}";

@@ -15,7 +15,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\NapasSwitch.Core\NapasSwitch.Core.csproj" />
+    <ProjectReference Include="..\NapasSwitch.Data\NapasSwitch.Data.csproj" />
   </ItemGroup>
 
 </Project>

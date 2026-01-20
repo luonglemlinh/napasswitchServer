@@ -9,7 +9,6 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\Components\NapasSwitch.Core\NapasSwitch.Core.csproj" />
     <ProjectReference Include="..\Components\NapasSwitch.Data\NapasSwitch.Data.csproj" />
     <ProjectReference Include="..\Components\NapasSwitch.Network\NapasSwitch.Network.csproj" />
     <ProjectReference Include="..\Components\NapasSwitchRouter\NapasSwitchRouter.csproj" />
