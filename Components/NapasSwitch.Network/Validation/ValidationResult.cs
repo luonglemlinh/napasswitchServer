@@ -47,7 +47,7 @@ namespace network.Validation
         public string GetFirstErrorCode()
         {
             var error = DataElementResults.FirstOrDefault(de => !de.IsValid);
-            return error?.ErrorCode ?? "96"; // Generic system error
+            return error?.ErrorCode ?? "96"; 
         }
 
         

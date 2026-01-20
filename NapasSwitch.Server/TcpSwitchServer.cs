@@ -30,9 +30,12 @@ namespace server
         private readonly TransactionLogger? _transactionLogger;
         private readonly TransactionStateMachine _stateMachine;
         private readonly SecureDataHandler _securityProvider;
+        private readonly PendingTransactionStore? _pendingStore;
+        private readonly ResponseCorrelationValidator _correlationValidator;
         private bool _disposed;
         private Timer? _statsTimer;
         private Timer? _poolHealthTimer;
+        private Timer? _cleanupTimer;
 
         // Thread-safe collection to track active connections
         // ConcurrentDictionary = multiple threads can access it safely!
@@ -48,6 +51,7 @@ namespace server
             _activeSessions = new ConcurrentDictionary<string, ClientSession>();
             _stateMachine = new TransactionStateMachine(transactionTimeoutSeconds: 30);
             _securityProvider = new SecureDataHandler(new SoftwareHsmStub());
+            _correlationValidator = new ResponseCorrelationValidator();
             
             _stateMachine.OnTransactionTimeout += OnTransactionTimeout;
             _stateMachine.OnReversalRequired += OnReversalRequired;
@@ -59,11 +63,13 @@ namespace server
             if (enableLogging && !string.IsNullOrEmpty(dbConnectionString))
             {
                 _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging);
-                Console.WriteLine("[INIT] Transaction logger initialized with circuit breaker");
+                _pendingStore = new PendingTransactionStore(dbConnectionString, expirationMinutes: 5);
+                Console.WriteLine("[INIT] Transaction logger and pending store initialized");
             }
             else
             {
                 _transactionLogger = null;
+                _pendingStore = null;
                 Console.WriteLine("[INIT] Transaction logger disabled");
             }
 
@@ -97,6 +103,13 @@ namespace server
         {
             _statsTimer = new Timer(LogServerStats, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
             _poolHealthTimer = new Timer(LogPoolHealth, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+            
+            if (_pendingStore != null)
+            {
+                _cleanupTimer = new Timer(async _ => await _pendingStore.CleanupExpiredAsync(), 
+                    null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
+            }
+            
             Console.WriteLine("[MONITORING] Background stats logging enabled (every 30s)");
         }
         
@@ -275,12 +288,13 @@ namespace server
         {
             var stopwatch = Stopwatch.StartNew();
             TransactionContext? txnContext = null;
+            string? txnId = null;
             
             try
             {
                 IsoMessage request = _parser.Parse(messageBytes);
                 
-                string txnId = $"{request.GetField(11)}_{DateTime.UtcNow.Ticks}";
+                txnId = $"{request.GetField(11)}_{DateTime.UtcNow.Ticks}";
                 txnContext = _stateMachine.CreateTransaction(sessionId, request);
 
                 var validationResult = _validator.ValidateMessage(request);
@@ -312,17 +326,26 @@ namespace server
                 if (!string.IsNullOrEmpty(clearPan))
                 {
                     encryptedPan = _securityProvider.EncryptPAN(clearPan);
-                    request.SetField(2, encryptedPan);
+                }
+
+                if (_pendingStore != null && (request.MessageType == "0200" || request.MessageType == "0400"))
+                {
+                    var requestCopy = new IsoMessage { MessageType = request.MessageType };
+                    foreach (var field in request.Fields)
+                    {
+                        requestCopy.SetField(field.Key, field.Key == 2 && encryptedPan != null ? encryptedPan : field.Value);
+                    }
+                    _ = _pendingStore.StoreRequestAsync(txnId, sessionId, requestCopy, messageBytes);
                 }
 
                 if (_transactionLogger != null)
                 {
-                    _ = _transactionLogger.LogRequestAsync(request, sessionId, "INBOUND");
-                }
-
-                if (!string.IsNullOrEmpty(encryptedPan) && !string.IsNullOrEmpty(clearPan))
-                {
-                    request.SetField(2, clearPan);
+                    var logRequest = new IsoMessage { MessageType = request.MessageType };
+                    foreach (var field in request.Fields)
+                    {
+                        logRequest.SetField(field.Key, field.Key == 2 && encryptedPan != null ? encryptedPan : field.Value);
+                    }
+                    _ = _transactionLogger.LogRequestAsync(logRequest, sessionId, "INBOUND");
                 }
 
                 IsoMessage response = request.MessageType switch
@@ -332,6 +355,35 @@ namespace server
                     "0800" => HandleNetworkManagement(request, sessionId),
                     _ => CreateErrorResponse(request, "12")
                 };
+
+                if (_pendingStore != null && txnId != null && (request.MessageType == "0200" || request.MessageType == "0400"))
+                {
+                    var pendingTxn = _pendingStore.GetRequestAsync(txnId).GetAwaiter().GetResult();
+                    
+                    if (pendingTxn != null)
+                    {
+                        var correlationResult = _correlationValidator.ValidateResponseMatchesRequest(request, response);
+                        
+                        if (!correlationResult.IsValid)
+                        {
+                            Console.WriteLine($"[CORRELATION-ERROR] Response does not match request:");
+                            Console.WriteLine(correlationResult.GetSummary());
+                            
+                            _pendingStore.MarkAsMismatchAsync(txnId, "Correlation validation failed").GetAwaiter().GetResult();
+                            
+                            txnContext.TryTransitionTo(TransactionState.SystemError, "30", "Response correlation failed");
+                            response = CreateErrorResponse(request, "30");
+                        }
+                        else
+                        {
+                            _pendingStore.MarkAsMatchedAsync(txnId, response.GetField(39) ?? "96").GetAwaiter().GetResult();
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[CORRELATION-WARN] No pending transaction found for {txnId}");
+                    }
+                }
 
                 txnContext.Response = response;
                 txnContext.TryTransitionTo(TransactionState.Completed);
@@ -548,6 +600,7 @@ namespace server
 
             _statsTimer?.Dispose();
             _poolHealthTimer?.Dispose();
+            _cleanupTimer?.Dispose();
             _issuerConnector?.Dispose();
             _transactionLogger?.Dispose();
             _stateMachine?.Dispose();
