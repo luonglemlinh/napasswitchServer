@@ -40,4 +40,12 @@
       </Bins>
     </Bank>
   </Banks>
+  <HandleClient>
+    <Checks>
+      <Check>
+        <Condition>messageLength &lt; 12</Condition>
+        <Action>SendFormatError</Action>
+      </Check>
+    </Checks>
+  </HandleClient>
 </BinRoutingConfiguration>

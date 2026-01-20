@@ -87,9 +87,7 @@ namespace router
 
                 // Step 3: Receive response from ISS
                 byte[] responseLengthBytes = new byte[2];
-                int bytesRead = connection.Stream.Read(responseLengthBytes, 0, 2);
-
-                if (bytesRead < 2)
+                if (!TryReadExact(connection.Stream, responseLengthBytes, 0, 2))
                 {
                     Console.WriteLine($"[{sessionId}] [ISS-ERROR] Failed to read response length header");
                     connection.MarkAsFailed();
@@ -100,20 +98,20 @@ namespace router
 
                 Console.WriteLine($"[{sessionId}] [ISS-RECV] Expecting {responseLength} bytes from ISS");
 
+                if (responseLength <= 0)
+                {
+                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Invalid response length: {responseLength}");
+                    connection.MarkAsFailed();
+                    throw new System.IO.IOException("Invalid response length");
+                }
+
                 // Read the full response
                 byte[] responseBytes = new byte[responseLength];
-                int totalRead = 0;
-
-                while (totalRead < responseLength)
+                if (!TryReadExact(connection.Stream, responseBytes, 0, responseLength))
                 {
-                    bytesRead = connection.Stream.Read(responseBytes, totalRead, responseLength - totalRead);
-                    if (bytesRead == 0)
-                    {
-                        Console.WriteLine($"[{sessionId}] [ISS-ERROR] Connection closed while reading response");
-                        connection.MarkAsFailed();
-                        throw new System.IO.IOException("Connection closed while reading response");
-                    }
-                    totalRead += bytesRead;
+                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Connection closed while reading response");
+                    connection.MarkAsFailed();
+                    throw new System.IO.IOException("Connection closed while reading response");
                 }
 
                 Console.WriteLine($"[{sessionId}] [ISS-RECV] Received complete response from ISS");
@@ -137,6 +135,21 @@ namespace router
                 // Return connection to pool (or close if marked as failed)
                 connection?.Dispose();
             }
+        }
+
+        private bool TryReadExact(NetworkStream stream, byte[] buffer, int offset, int count)
+        {
+            int totalRead = 0;
+            while (totalRead < count)
+            {
+                int bytesRead = stream.Read(buffer, offset + totalRead, count - totalRead);
+                if (bytesRead == 0)
+                {
+                    return false;
+                }
+                totalRead += bytesRead;
+            }
+            return true;
         }
 
         public ConnectionPoolStats GetPoolStats() => _connectionPool.GetStats();

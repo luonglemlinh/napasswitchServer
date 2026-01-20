@@ -158,7 +158,7 @@ namespace server
                     if (tableCount == 0)
                     {
                         Console.WriteLine("[ERROR] TransactionLog table does not exist");
-                        Console.WriteLine("[ERROR] Please run the CreateSchema.sql script first");
+                        Console.WriteLine("[ERROR] Please run the iso.sql script first");
                         return false;
                     }
                     

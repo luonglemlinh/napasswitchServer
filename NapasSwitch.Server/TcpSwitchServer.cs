@@ -292,8 +292,16 @@ namespace server
             
             try
             {
-                IsoMessage request = _parser.Parse(messageBytes);
-                
+                IsoMessage request;
+                try {
+                    request = _parser.Parse(messageBytes);
+                } catch (Exception ex) {
+                    Console.WriteLine($"[{sessionId}] Parse error: {ex.Message}");
+                    var resp = CreateErrorResponse(new IsoMessage { MessageType = "0200" }, "30");
+                    WriteResponse(stream, resp);
+                    continue;
+                }
+
                 txnId = $"{request.GetField(11)}_{DateTime.UtcNow.Ticks}";
                 txnContext = _stateMachine.CreateTransaction(sessionId, request);
 
