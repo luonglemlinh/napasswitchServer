@@ -93,6 +93,10 @@ namespace server
                     return;
                 }
 
+                // Step 5: Connect to TS (persistent connection)
+                Console.WriteLine("\n[TS] Establishing persistent connection to Transaction Switch...");
+                server.ConnectToTSAsync().Wait();
+
                 Console.WriteLine();
                 
                 // Start server (this blocks)

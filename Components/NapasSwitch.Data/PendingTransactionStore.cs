@@ -9,6 +9,12 @@ namespace data
     {
         private readonly string _connectionString;
         private readonly int _expirationMinutes;
+        private static readonly TimeZoneInfo VietnamTimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
+
+        /// <summary>
+        /// Get current time in Vietnam timezone (UTC+7)
+        /// </summary>
+        private static DateTime GetVietnamTime() => TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, VietnamTimeZone);
 
         public PendingTransactionStore(string connectionString, int expirationMinutes = 5)
         {
@@ -52,7 +58,7 @@ namespace data
             command.Parameters.AddWithValue("@MerchantID", request.GetField(42) ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@RRN", request.GetField(37) ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@MessageBytes", messageBytes);
-            command.Parameters.AddWithValue("@ExpiresAt", DateTime.UtcNow.AddMinutes(_expirationMinutes));
+            command.Parameters.AddWithValue("@ExpiresAt", GetVietnamTime().AddMinutes(_expirationMinutes));
 
             await command.ExecuteNonQueryAsync();
             
@@ -151,13 +157,14 @@ namespace data
             var command = new SqlCommand(@"
                 UPDATE PendingTransactions 
                 SET Status = 'MATCHED', 
-                    ResponseReceivedAt = GETUTCDATE(),
+                    ResponseReceivedAt = @VietnamTime,
                     ResponseCode = @ResponseCode,
-                    UpdatedAt = GETUTCDATE()
+                    UpdatedAt = @VietnamTime
                 WHERE TransactionId = @TransactionId", connection);
 
             command.Parameters.AddWithValue("@TransactionId", transactionId);
             command.Parameters.AddWithValue("@ResponseCode", responseCode);
+            command.Parameters.AddWithValue("@VietnamTime", GetVietnamTime());
 
             await command.ExecuteNonQueryAsync();
             Console.WriteLine($"[PENDING-TXN] Marked {transactionId} as MATCHED with RC: {responseCode}");
@@ -171,13 +178,14 @@ namespace data
             var command = new SqlCommand(@"
                 UPDATE PendingTransactions 
                 SET Status = 'MISMATCH', 
-                    ResponseReceivedAt = GETUTCDATE(),
+                    ResponseReceivedAt = @VietnamTime,
                     ResponseCode = @ErrorReason,
-                    UpdatedAt = GETUTCDATE()
+                    UpdatedAt = @VietnamTime
                 WHERE TransactionId = @TransactionId", connection);
 
             command.Parameters.AddWithValue("@TransactionId", transactionId);
             command.Parameters.AddWithValue("@ErrorReason", errorReason);
+            command.Parameters.AddWithValue("@VietnamTime", GetVietnamTime());
 
             await command.ExecuteNonQueryAsync();
             Console.WriteLine($"[PENDING-TXN] Marked {transactionId} as MISMATCH: {errorReason}");
@@ -188,10 +196,13 @@ namespace data
             using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
+            var vnTime = GetVietnamTime();
             var command = new SqlCommand(@"
                 UPDATE PendingTransactions 
-                SET Status = 'EXPIRED', UpdatedAt = GETUTCDATE()
-                WHERE ExpiresAt < GETUTCDATE() AND Status = 'PENDING'", connection);
+                SET Status = 'EXPIRED', UpdatedAt = @VietnamTime
+                WHERE ExpiresAt < @VietnamTime AND Status = 'PENDING'", connection);
+
+            command.Parameters.AddWithValue("@VietnamTime", vnTime);
 
             int updated = await command.ExecuteNonQueryAsync();
             if (updated > 0)

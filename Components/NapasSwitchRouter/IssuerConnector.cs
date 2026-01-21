@@ -1,4 +1,5 @@
 ﻿using System;
+using System.Linq;
 using System.Net.Sockets;
 using core.Configuration;
 using core.Models;
@@ -78,6 +79,15 @@ namespace router
                 lengthHeader[0] = (byte)(requestBytes.Length >> 8);
                 lengthHeader[1] = (byte)(requestBytes.Length & 0xFF);
 
+                // === DEBUG: Show raw bytes being sent to TS ===
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === MESSAGE TO TS ===");
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Length Header (2 bytes): {BitConverter.ToString(lengthHeader)}");
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ISO Message ({requestBytes.Length} bytes):");
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] HEX: {BitConverter.ToString(requestBytes).Replace("-", " ")}");
+                string asciiPreview = new string(requestBytes.Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ASCII: {asciiPreview}");
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === END MESSAGE ===");
+
                 // Send to ISS
                 connection.Stream.Write(lengthHeader, 0, 2);
                 connection.Stream.Write(requestBytes, 0, requestBytes.Length);
@@ -86,35 +96,134 @@ namespace router
                 Console.WriteLine($"[{sessionId}] [ISS-SEND] Sent {requestBytes.Length} bytes to ISS");
 
                 // Step 3: Receive response from ISS
-                byte[] responseLengthBytes = new byte[2];
-                if (!TryReadExact(connection.Stream, responseLengthBytes, 0, 2))
+                // First, try to read initial bytes to detect the format
+                byte[] initialBytes = new byte[4];
+                int initialRead = 0;
+                
+                // Set a reasonable read timeout
+                connection.Stream.ReadTimeout = 30000;
+                
+                try
                 {
-                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Failed to read response length header");
+                    // Try to read first 4 bytes to detect format
+                    initialRead = connection.Stream.Read(initialBytes, 0, 4);
+                }
+                catch (System.IO.IOException ex)
+                {
+                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Timeout or error reading from TS: {ex.Message}");
                     connection.MarkAsFailed();
-                    throw new System.IO.IOException("Failed to read response length header");
+                    throw;
                 }
 
-                int responseLength = (responseLengthBytes[0] << 8) | responseLengthBytes[1];
-
-                Console.WriteLine($"[{sessionId}] [ISS-RECV] Expecting {responseLength} bytes from ISS");
-
-                if (responseLength <= 0)
+                if (initialRead == 0)
                 {
-                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Invalid response length: {responseLength}");
+                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] TS closed connection without response");
                     connection.MarkAsFailed();
-                    throw new System.IO.IOException("Invalid response length");
+                    throw new System.IO.IOException("TS closed connection without response");
                 }
 
-                // Read the full response
-                byte[] responseBytes = new byte[responseLength];
-                if (!TryReadExact(connection.Stream, responseBytes, 0, responseLength))
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === RESPONSE FROM TS ===");
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Initial {initialRead} bytes: {BitConverter.ToString(initialBytes, 0, initialRead)}");
+                
+                int responseLength;
+                byte[] responseBytes;
+                int dataOffset = 0;
+
+                // Try to detect response format
+                // Check if first 2 bytes look like a valid 2-byte length (common format)
+                int len2Byte = (initialBytes[0] << 8) | initialBytes[1];
+                
+                // Check if first 4 bytes look like a 4-byte length
+                int len4Byte = (initialBytes[0] << 24) | (initialBytes[1] << 16) | (initialBytes[2] << 8) | initialBytes[3];
+
+                // Check if response starts with MTI (e.g., "0210" = 30 32 31 30)
+                bool startsWithMti = initialRead >= 4 && 
+                    initialBytes[0] == 0x30 && // '0'
+                    (initialBytes[1] == 0x32 || initialBytes[1] == 0x34 || initialBytes[1] == 0x38) && // '2', '4', or '8'
+                    initialBytes[2] == 0x31 && // '1'
+                    initialBytes[3] == 0x30;   // '0'
+
+                if (startsWithMti)
                 {
-                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Connection closed while reading response");
+                    // No length header - response starts directly with MTI
+                    // Need to read until connection closes or timeout
+                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected: Response starts with MTI (no length header)");
+                    
+                    var buffer = new System.IO.MemoryStream();
+                    buffer.Write(initialBytes, 0, initialRead);
+                    
+                    byte[] chunk = new byte[1024];
+                    int chunkRead;
+                    connection.Stream.ReadTimeout = 2000; // Short timeout for remaining data
+                    
+                    try
+                    {
+                        while ((chunkRead = connection.Stream.Read(chunk, 0, chunk.Length)) > 0)
+                        {
+                            buffer.Write(chunk, 0, chunkRead);
+                        }
+                    }
+                    catch (System.IO.IOException) { /* Timeout is expected */ }
+                    
+                    responseBytes = buffer.ToArray();
+                    responseLength = responseBytes.Length;
+                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Read {responseLength} bytes (no length header format)");
+                }
+                else if (len2Byte > 0 && len2Byte < 2000)
+                {
+                    // Looks like 2-byte length header
+                    responseLength = len2Byte;
+                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected: 2-byte length header, length={responseLength}");
+                    
+                    responseBytes = new byte[responseLength];
+                    // Copy the 2 bytes after length header
+                    Array.Copy(initialBytes, 2, responseBytes, 0, Math.Min(initialRead - 2, responseLength));
+                    dataOffset = initialRead - 2;
+                    
+                    // Read remaining bytes
+                    if (dataOffset < responseLength)
+                    {
+                        if (!TryReadExact(connection.Stream, responseBytes, dataOffset, responseLength - dataOffset))
+                        {
+                            Console.WriteLine($"[{sessionId}] [ISS-ERROR] Failed to read complete response");
+                            connection.MarkAsFailed();
+                            throw new System.IO.IOException("Failed to read complete response");
+                        }
+                    }
+                }
+                else if (len4Byte > 0 && len4Byte < 2000)
+                {
+                    // Looks like 4-byte length header
+                    responseLength = len4Byte;
+                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected: 4-byte length header, length={responseLength}");
+                    
+                    responseBytes = new byte[responseLength];
+                    if (!TryReadExact(connection.Stream, responseBytes, 0, responseLength))
+                    {
+                        Console.WriteLine($"[{sessionId}] [ISS-ERROR] Failed to read complete response");
+                        connection.MarkAsFailed();
+                        throw new System.IO.IOException("Failed to read complete response");
+                    }
+                }
+                else
+                {
+                    // Unknown format - dump what we got
+                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Unknown response format!");
+                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] 2-byte interpret: {len2Byte}");
+                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] 4-byte interpret: {len4Byte}");
+                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Raw: {BitConverter.ToString(initialBytes, 0, initialRead)}");
+                    string asciiInitial = new string(initialBytes.Take(initialRead).Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
+                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ASCII: {asciiInitial}");
                     connection.MarkAsFailed();
-                    throw new System.IO.IOException("Connection closed while reading response");
+                    throw new System.IO.IOException($"Unknown response format from TS");
                 }
 
-                Console.WriteLine($"[{sessionId}] [ISS-RECV] Received complete response from ISS");
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Response HEX: {BitConverter.ToString(responseBytes).Replace("-", " ")}");
+                string asciiResponse = new string(responseBytes.Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Response ASCII: {asciiResponse}");
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === END RESPONSE ===");
+
+                Console.WriteLine($"[{sessionId}] [ISS-RECV] Received {responseBytes.Length} bytes from ISS");
 
                 // Step 4: Parse the response
                 IsoMessage response = _parser.Parse(responseBytes);

@@ -94,8 +94,8 @@ namespace core.ISO8583
             // DE25: POS Condition Code - Fixed 2 numeric
             schema.AddField(25, "POS Condition Code", FieldType.Fixed, fixedLength: 2);
             
-            // DE32: Acquiring Institution ID - LLVAR, max 11 digits
-            schema.AddField(32, "Acquiring Institution ID", FieldType.Variable, maxLength: 11);
+            // DE32: Acquiring Institution ID - Fixed 11 digits (NAPAS format, left-padded with zeros)
+            schema.AddField(32, "Acquiring Institution ID", FieldType.Fixed, fixedLength: 11);
             
             // DE33: Forwarding Institution ID - LLVAR, max 11 digits
             schema.AddField(33, "Forwarding Institution ID", FieldType.Variable, maxLength: 11);
@@ -131,6 +131,9 @@ namespace core.ISO8583
             var de55 = new IsoFieldDefinition(55, "ICC System Related Data", FieldType.Variable, maxLength: 999);
             de55.LengthEncoding = LengthEncoding.LLLVAR;
             schema.Fields[55] = de55;
+            
+            // DE70: Network Management Information Code - Fixed 3 numeric
+            schema.AddField(70, "Network Management Information Code", FieldType.Fixed, fixedLength: 3);
 
             return schema;
         }

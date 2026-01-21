@@ -18,65 +18,113 @@ using System.Data.SqlClient;
 
 namespace server
 {
-    /// Multi-threaded TCP server that listens for incoming ISO-8583 messages
+/// Multi-threaded TCP server that listens for incoming ISO-8583 messages
     
-    public class TcpSwitchServer : IDisposable
+public class TcpSwitchServer : IDisposable
+{
+    private TcpListener? _listener;
+    private bool _isRunning;
+    private readonly int _port;
+    private readonly IsoParser _parser;
+    private readonly IssuerConnector _issuerConnector;
+    private readonly TransactionLogger? _transactionLogger;
+    private readonly TransactionStateMachine _stateMachine;
+    private readonly SecureDataHandler _securityProvider;
+    private readonly PendingTransactionStore? _pendingStore;
+    private readonly ResponseCorrelationValidator _correlationValidator;
+    private bool _disposed;
+    private Timer? _statsTimer;
+    private Timer? _poolHealthTimer;
+    private Timer? _cleanupTimer;
+
+    // Persistent connection to TS (Transaction Switch)
+    private TSPersistentConnection? _tsConnection;
+
+    // Thread-safe collection to track active connections
+    // ConcurrentDictionary = multiple threads can access it safely!
+    private readonly ConcurrentDictionary<string, ClientSession> _activeSessions;
+    private readonly NapasDataElementValidator _validator;
+
+    // Update the constructor
+    public TcpSwitchServer(int port = 8583, string dbConnectionString = "", bool enableLogging = true)
     {
-        private TcpListener? _listener;
-        private bool _isRunning;
-        private readonly int _port;
-        private readonly IsoParser _parser;
-        private readonly IssuerConnector _issuerConnector;
-        private readonly TransactionLogger? _transactionLogger;
-        private readonly TransactionStateMachine _stateMachine;
-        private readonly SecureDataHandler _securityProvider;
-        private readonly PendingTransactionStore? _pendingStore;
-        private readonly ResponseCorrelationValidator _correlationValidator;
-        private bool _disposed;
-        private Timer? _statsTimer;
-        private Timer? _poolHealthTimer;
-        private Timer? _cleanupTimer;
-
-        // Thread-safe collection to track active connections
-        // ConcurrentDictionary = multiple threads can access it safely!
-        private readonly ConcurrentDictionary<string, ClientSession> _activeSessions;
-        private readonly NapasDataElementValidator _validator;
-
-        // Update the constructor
-        public TcpSwitchServer(int port = 8583, string dbConnectionString = "", bool enableLogging = true)
+        _port = port;
+        _parser = new IsoParser();
+        _issuerConnector = new IssuerConnector();
+        _activeSessions = new ConcurrentDictionary<string, ClientSession>();
+        _stateMachine = new TransactionStateMachine(transactionTimeoutSeconds: 30);
+        _securityProvider = new SecureDataHandler(new SoftwareHsmStub());
+        _correlationValidator = new ResponseCorrelationValidator();
+            
+        _stateMachine.OnTransactionTimeout += OnTransactionTimeout;
+        _stateMachine.OnReversalRequired += OnReversalRequired;
+            
+        string configPath = FindValidationConfigPath();
+        _validator = new NapasDataElementValidator(configPath);
+            
+        // Initialize persistent TS connection (for default issuer)
+        InitializeTSConnection();
+            
+        // Initialize transaction logger
+        if (enableLogging && !string.IsNullOrEmpty(dbConnectionString))
         {
-            _port = port;
-            _parser = new IsoParser();
-            _issuerConnector = new IssuerConnector();
-            _activeSessions = new ConcurrentDictionary<string, ClientSession>();
-            _stateMachine = new TransactionStateMachine(transactionTimeoutSeconds: 30);
-            _securityProvider = new SecureDataHandler(new SoftwareHsmStub());
-            _correlationValidator = new ResponseCorrelationValidator();
+            _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging);
+            _pendingStore = new PendingTransactionStore(dbConnectionString, expirationMinutes: 5);
+            Console.WriteLine("[INIT] Transaction logger and pending store initialized");
+        }
+        else
+        {
+            _transactionLogger = null;
+            _pendingStore = null;
+            Console.WriteLine("[INIT] Transaction logger disabled");
+        }
+
+        StartBackgroundMonitoring();
+    }
+
+    /// <summary>
+    /// Initialize persistent connection to the default TS
+    /// </summary>
+    private void InitializeTSConnection()
+    {
+        // Find the default TS from configuration
+        var allIssuers = ConfigurationLoader.Instance.GetAllIssuers();
+        var defaultTS = allIssuers.FirstOrDefault(i => i.IsDefault);
             
-            _stateMachine.OnTransactionTimeout += OnTransactionTimeout;
-            _stateMachine.OnReversalRequired += OnReversalRequired;
-            
-            string configPath = FindValidationConfigPath();
-            _validator = new NapasDataElementValidator(configPath);
-            
-            // Initialize transaction logger
-            if (enableLogging && !string.IsNullOrEmpty(dbConnectionString))
+        if (defaultTS != null)
+        {
+            Console.WriteLine($"[INIT] Found default TS: {defaultTS.IssuerName} at {defaultTS.Host}:{defaultTS.Port}");
+            _tsConnection = new TSPersistentConnection(defaultTS, heartbeatIntervalMs: 30000);
+            Console.WriteLine("[INIT] TS persistent connection manager created");
+        }
+        else
+        {
+            Console.WriteLine("[INIT] No default TS configured, using per-transaction connections");
+            _tsConnection = null;
+        }
+    }
+
+    /// <summary>
+    /// Connect to TS (call after configurations are loaded)
+    /// </summary>
+    public async Task ConnectToTSAsync()
+    {
+        if (_tsConnection != null)
+        {
+            Console.WriteLine("[TS] Establishing persistent connection to Transaction Switch...");
+            bool connected = await _tsConnection.ConnectAsync();
+            if (connected)
             {
-                _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging);
-                _pendingStore = new PendingTransactionStore(dbConnectionString, expirationMinutes: 5);
-                Console.WriteLine("[INIT] Transaction logger and pending store initialized");
+                Console.WriteLine("[TS] Persistent connection established successfully!");
             }
             else
             {
-                _transactionLogger = null;
-                _pendingStore = null;
-                Console.WriteLine("[INIT] Transaction logger disabled");
+                Console.WriteLine("[TS] WARNING: Failed to establish persistent connection. Will retry on first transaction.");
             }
-
-            StartBackgroundMonitoring();
         }
+    }
         
-        private string FindValidationConfigPath()
+    private string FindValidationConfigPath()
         {
             var searchPaths = new[]
             {
@@ -541,6 +589,7 @@ namespace server
         }
 
      
+     
         private IsoMessage HandleAuthorizationRequest(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
             string? cardBIN = request.GetCardBIN();
@@ -568,7 +617,32 @@ namespace server
             txnContext.TryTransitionTo(TransactionState.RoutingToIssuer);
             txnContext.SentToIssuerAt = DateTime.UtcNow;
 
-            IsoMessage response = _issuerConnector.ForwardToIssuer(request, issuerBank, sessionId);
+            IsoMessage response;
+
+            // Use persistent connection for default TS, otherwise use per-transaction connection
+            if (issuerBank.IsDefault && _tsConnection != null)
+            {
+                Console.WriteLine($" [{sessionId}] Using persistent TS connection");
+                var responseTask = _tsConnection.ForwardTransactionAsync(request, sessionId);
+                responseTask.Wait(); // Block until complete (since this method is not async)
+                var tsResponse = responseTask.Result;
+                
+                if (tsResponse != null)
+                {
+                    response = tsResponse;
+                }
+                else
+                {
+                    Console.WriteLine($" [{sessionId}] TS connection failed, returning system error");
+                    txnContext.TryTransitionTo(TransactionState.SystemError, "91", "TS unavailable");
+                    return CreateErrorResponse(request, "91");
+                }
+            }
+            else
+            {
+                // Use per-transaction connection for other issuers
+                response = _issuerConnector.ForwardToIssuer(request, issuerBank, sessionId);
+            }
             
             txnContext.ResponseReceivedAt = DateTime.UtcNow;
             txnContext.TryTransitionTo(TransactionState.ResponseReceived);
@@ -730,6 +804,7 @@ namespace server
         }
 
         
+        
         /// Dispose resources
         
         public void Dispose()
@@ -738,6 +813,14 @@ namespace server
             _disposed = true;
 
             Stop();
+
+            // Gracefully disconnect from TS
+            if (_tsConnection != null)
+            {
+                Console.WriteLine("[DISPOSE] Signing off from TS...");
+                _tsConnection.SignOffAndDisconnectAsync().Wait();
+                _tsConnection.Dispose();
+            }
 
             _statsTimer?.Dispose();
             _poolHealthTimer?.Dispose();

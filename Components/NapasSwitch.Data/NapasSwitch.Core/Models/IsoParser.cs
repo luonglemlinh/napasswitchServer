@@ -64,17 +64,34 @@ public class IsoParser
     }
 
     
-    /// Parse bitmap (8 bytes = 64 fields)
-    /// If bit 1 is set, secondary bitmap follows (additional 8 bytes for fields 65-128)
+    
+    /// Parse bitmap - supports both BINARY (8 bytes) and HEX (16 ASCII chars) formats
+    /// If bit 1 is set, secondary bitmap follows (additional 8 bytes/16 chars for fields 65-128)
     
     private bool[] ParseBitmap(byte[] data, ref int offset)
     {
         var bitmap = new bool[128]; // Support up to 128 fields
 
-        // Primary bitmap (8 bytes)
-        byte[] primaryBitmap = new byte[8];
-        Array.Copy(data, offset, primaryBitmap, 0, 8);
-        offset += 8;
+        // Detect if bitmap is in HEX format (16 ASCII hex characters) or BINARY format (8 bytes)
+        // HEX format: characters are 0-9, A-F, a-f
+        bool isHexFormat = IsHexBitmap(data, offset);
+
+        byte[] primaryBitmap;
+        
+        if (isHexFormat)
+        {
+            // HEX format: 16 ASCII characters representing 8 bytes
+            string hexStr = Encoding.ASCII.GetString(data, offset, 16);
+            primaryBitmap = HexStringToBytes(hexStr);
+            offset += 16;
+        }
+        else
+        {
+            // BINARY format: 8 raw bytes
+            primaryBitmap = new byte[8];
+            Array.Copy(data, offset, primaryBitmap, 0, 8);
+            offset += 8;
+        }
 
         // Convert primary bitmap to bits
         for (int i = 0; i < 64; i++)
@@ -87,9 +104,20 @@ public class IsoParser
         // Check if secondary bitmap is present (bit 1 / field 1 = first bit)
         if (bitmap[0])
         {
-            byte[] secondaryBitmap = new byte[8];
-            Array.Copy(data, offset, secondaryBitmap, 0, 8);
-            offset += 8;
+            byte[] secondaryBitmap;
+            
+            if (isHexFormat)
+            {
+                string hexStr = Encoding.ASCII.GetString(data, offset, 16);
+                secondaryBitmap = HexStringToBytes(hexStr);
+                offset += 16;
+            }
+            else
+            {
+                secondaryBitmap = new byte[8];
+                Array.Copy(data, offset, secondaryBitmap, 0, 8);
+                offset += 8;
+            }
 
             for (int i = 0; i < 64; i++)
             {
@@ -100,6 +128,30 @@ public class IsoParser
         }
 
         return bitmap;
+    }
+
+    /// <summary>
+    /// Check if the bitmap at the given offset is in HEX ASCII format
+    /// HEX format uses characters 0-9, A-F, a-f
+    /// BINARY format uses raw bytes (often containing non-printable characters)
+    /// </summary>
+    private bool IsHexBitmap(byte[] data, int offset)
+    {
+        if (offset + 16 > data.Length)
+            return false; // Not enough bytes for HEX format, assume binary
+        
+        // Check if all 16 bytes are valid HEX ASCII characters
+        for (int i = 0; i < 16; i++)
+        {
+            byte b = data[offset + i];
+            bool isHexChar = (b >= '0' && b <= '9') || 
+                             (b >= 'A' && b <= 'F') || 
+                             (b >= 'a' && b <= 'f');
+            if (!isHexChar)
+                return false;
+        }
+        
+        return true;
     }
 
     
@@ -283,6 +335,7 @@ public class IsoParser
 
     private IEnumerable<byte> BuildBitmapSegment(bool[] bitmap, int offset)
     {
+        // Build bitmap as BINARY (8 raw bytes)
         var result = new byte[8];
         for (int i = 0; i < 64; i++)
         {
