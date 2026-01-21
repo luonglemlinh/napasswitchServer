@@ -260,8 +260,30 @@ namespace server
 
                     PrintRawMessage(messageBytes, sessionId);
 
+                    byte[] isoPayload = messageBytes;
+                    int headerLen = 0;
+
+                    // Try: assume 5-byte TPDU header (common ISO8583 framing)
+                    if (messageLength > 5)
+                    {
+                        // Check if bytes 5-8 look like a valid ISO MTI (4 ASCII digits)
+                        bool looksLikeIsoAtOffset5 = messageLength >= 9 &&
+                            IsAsciiDigit(messageBytes[5]) &&
+                            IsAsciiDigit(messageBytes[6]) &&
+                            IsAsciiDigit(messageBytes[7]) &&
+                            IsAsciiDigit(messageBytes[8]);
+
+                        if (looksLikeIsoAtOffset5)
+                        {
+                            headerLen = 5;
+                            isoPayload = messageBytes[5..];
+                            Console.WriteLine($" [{sessionId}] Detected 5-byte TPDU header. ISO payload starts at byte 5 ({isoPayload.Length} bytes).");
+                            Console.WriteLine($" [{sessionId}] First 20 bytes of ISO: {BitConverter.ToString(isoPayload, 0, Math.Min(20, isoPayload.Length))}");
+                        }
+                    }
+
                     // Step 3: Process the message and get response
-                    byte[]? responseBytes = ProcessMessage(messageBytes, sessionId);
+                    byte[]? responseBytes = ProcessMessage(isoPayload, sessionId);
 
                     // Step 4: Send response back to client
                     if (responseBytes != null && responseBytes.Length > 0)
@@ -325,6 +347,37 @@ namespace server
             Console.WriteLine($"   {asciiString}");
         }
 
+        private static bool IsAsciiDigit(byte b) => b >= (byte)'0' && b <= (byte)'9';
+
+        private static (byte[] payload, int headerLength) ExtractIsoPayload(byte[] received)
+        {
+            // Heuristic: find the first 4 ASCII digits which look like an MTI (e.g. 0200/0210/0400/0800).
+            // If present after a binary/TPDU-style header, strip everything before MTI.
+            if (received.Length < 4) return (received, 0);
+
+            static bool IsDigit(byte b) => b >= (byte)'0' && b <= (byte)'9';
+            static bool LooksLikeMti(ReadOnlySpan<byte> s)
+            {
+                if (s.Length < 4) return false;
+                if (!(IsDigit(s[0]) && IsDigit(s[1]) && IsDigit(s[2]) && IsDigit(s[3]))) return false;
+                // Common MTIs in this switch.
+                if (s[0] != (byte)'0') return false;
+                return s[1] == (byte)'1' || s[1] == (byte)'2' || s[1] == (byte)'4' || s[1] == (byte)'8';
+            }
+
+            for (int i = 0; i <= received.Length - 4; i++)
+            {
+                if (LooksLikeMti(received.AsSpan(i, 4)))
+                {
+                    if (i == 0) return (received, 0);
+                    return (received[i..], i);
+                }
+            }
+
+            // If we can't find an MTI, don't strip anything.
+            return (received, 0);
+        }
+
         
         /// Process an incoming ISO-8583 message
         /// This is where the routing magic happens!
@@ -337,6 +390,14 @@ namespace server
             
             try
             {
+                // Decode ASCII-hex payload if client sent textual hex
+                if (LooksLikeHexAscii(messageBytes))
+                {
+                    string hex = System.Text.Encoding.ASCII.GetString(messageBytes);
+                    messageBytes = HexToBytesSafe(hex);
+                    Console.WriteLine($" [{sessionId}] Detected ASCII-hex payload. Decoded to {messageBytes.Length} bytes.");
+                }
+
                 IsoMessage request;
                 try {
                     request = _parser.Parse(messageBytes);
@@ -348,6 +409,9 @@ namespace server
 
                 txnId = $"{request.GetField(11)}_{DateTime.UtcNow.Ticks}";
                 txnContext = _stateMachine.CreateTransaction(sessionId, request);
+
+                // Normalize local time/date fields (DE12/DE13) to Vietnam time if missing/invalid
+                NormalizeLocalDateTimeFields(request);
 
                 var validationResult = _validator.ValidateMessage(request);
                 if (!validationResult.IsValid)
@@ -617,6 +681,31 @@ namespace server
             return $"{pan[..6]}****{pan[^4..]}";
         }
 
+        private void NormalizeLocalDateTimeFields(IsoMessage msg)
+        {
+            var vnTz = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
+            var nowVn = TimeZoneInfo.ConvertTime(DateTime.UtcNow, vnTz);
+
+            EnsureNumericField(msg, 7, nowVn.ToString("MMddHHmmss"), 10); // Transmission date/time
+            EnsureNumericField(msg, 12, nowVn.ToString("HHmmss"), 6); // Local time
+            EnsureNumericField(msg, 13, nowVn.ToString("MMdd"), 4);   // Local date
+        }
+
+        private void EnsureNumericField(IsoMessage msg, int field, string fallback, int requiredLength)
+        {
+            string? val = msg.GetField(field);
+
+            bool needsReplace = string.IsNullOrEmpty(val)
+                || val!.Length != requiredLength
+                || !val.All(char.IsDigit)
+                || val.All(c => c == '0');
+
+            if (needsReplace)
+            {
+                msg.SetField(field, fallback);
+            }
+        }
+
         
         /// Stop the server
         
@@ -658,6 +747,28 @@ namespace server
             _stateMachine?.Dispose();
             
             Console.WriteLine("[DISPOSE] TcpSwitchServer disposed");
+        }
+
+        private static bool LooksLikeHexAscii(byte[] data)
+        {
+            if (data.Length < 8 || data.Length % 2 != 0) return false;
+            foreach (byte b in data)
+            {
+                bool isHexDigit = (b >= '0' && b <= '9') || (b >= 'A' && b <= 'F') || (b >= 'a' && b <= 'f');
+                if (!isHexDigit) return false;
+            }
+            return true;
+        }
+
+        private static byte[] HexToBytesSafe(string hex)
+        {
+            int len = hex.Length;
+            byte[] result = new byte[len / 2];
+            for (int i = 0; i < len; i += 2)
+            {
+                result[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
+            }
+            return result;
         }
     }
 

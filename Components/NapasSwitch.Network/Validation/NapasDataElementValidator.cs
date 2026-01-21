@@ -276,6 +276,7 @@ namespace network.Validation
         }
 
         
+        
         /// Check Requireddata elements based on MTI
         
         private List<DataElementValidationResult> CheckRequiredDataElements(IsoMessage message)
@@ -283,6 +284,35 @@ namespace network.Validation
             var results = new List<DataElementValidationResult>();
             var mti = message.MessageType;
 
+            // Base required fields for financial transactions (0200/0400)
+            // Only enforce truly essential fields - let config handle the rest
+            if (mti == "0200" || mti == "0400")
+            {
+                // These are essential for routing and processing
+                int[] baseRequired = { 2, 3, 4, 11 }; // PAN, ProcessingCode, Amount, STAN
+                foreach (var de in baseRequired)
+                {
+                    if (!message.Fields.ContainsKey(de))
+                    {
+                        results.Add(BuildMissingResult(de, mti));
+                    }
+                }
+            }
+
+            // Track-2 related requirements: enforce when DE35 (Track 2) is present
+            if (message.Fields.ContainsKey(35))
+            {
+                int[] trackRequired = { 14, 35, 52 };
+                foreach (var de in trackRequired)
+                {
+                    if (!message.Fields.ContainsKey(de))
+                    {
+                        results.Add(BuildMissingResult(de, mti));
+                    }
+                }
+            }
+
+            // Existing configuration-based RequiredIn rules
             foreach (var kvp in _dataElementDefinitions)
             {
                 var definition = kvp.Value;
@@ -305,6 +335,29 @@ namespace network.Validation
             return results;
         }
 
+        private DataElementValidationResult BuildMissingResult(int deNumber, string mti)
+        {
+            if (_dataElementDefinitions.TryGetValue(deNumber, out var definition))
+            {
+                return new DataElementValidationResult
+                {
+                    DataElementNumber = deNumber,
+                    DataElementName = definition.Name,
+                    IsValid = false,
+                    ErrorCode = definition.ErrorCode,
+                    ErrorMessage = $"RequiredDE{deNumber} ({definition.Name}) is missing for MTI {mti}"
+                };
+            }
+
+            return new DataElementValidationResult
+            {
+                DataElementNumber = deNumber,
+                DataElementName = $"DE{deNumber}",
+                IsValid = false,
+                ErrorCode = "30",
+                ErrorMessage = $"RequiredDE{deNumber} is missing for MTI {mti}"
+            };
+        }
         
         /// Validate data type (N=Numeric, AN=Alphanumeric, ANS=Alphanumeric+Special, B=Binary/Hex)
         

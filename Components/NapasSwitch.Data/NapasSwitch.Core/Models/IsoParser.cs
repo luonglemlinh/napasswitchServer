@@ -147,23 +147,85 @@ public class IsoParser
 
     private string ExtractVariableField(byte[] data, LengthEncoding encoding, ref int offset)
     {
-        int lengthPrefix = encoding switch
-        {
-            LengthEncoding.LLVAR => 2,
-            LengthEncoding.LLLVAR => 3,
-            _ => throw new InvalidOperationException($"Unknown encoding: {encoding}")
-        };
+            int asciiLenDigits = encoding switch
+            {
+                LengthEncoding.LLVAR => 2,
+                LengthEncoding.LLLVAR => 3,
+                _ => throw new InvalidOperationException($"Unknown encoding: {encoding}")
+            };
 
-        string lengthStr = System.Text.Encoding.ASCII.GetString(data, offset, lengthPrefix);
-        offset += lengthPrefix;
+            int fieldLength;
 
-        if (!int.TryParse(lengthStr, out int fieldLength))
-            throw new InvalidOperationException($"Invalid length prefix: {lengthStr}");
+            // First try ASCII length prefix
+            if (TryParseAsciiLength(data, offset, asciiLenDigits, out fieldLength))
+            {
+                offset += asciiLenDigits;
+            }
+            else if (TryParsePackedBcdLength(data, offset, asciiLenDigits, out fieldLength, out int bytesConsumed))
+            {
+                offset += bytesConsumed;
+            }
+            else
+            {
+                string lengthStr = System.Text.Encoding.ASCII.GetString(data, offset, Math.Min(asciiLenDigits, data.Length - offset));
+                throw new InvalidOperationException($"Invalid length prefix: {lengthStr}");
+            }
 
         string value = System.Text.Encoding.ASCII.GetString(data, offset, fieldLength);
         offset += fieldLength;
         return value;
     }
+
+        private static bool TryParseAsciiLength(byte[] data, int offset, int digits, out int value)
+        {
+            value = 0;
+            if (offset + digits > data.Length) return false;
+            for (int i = 0; i < digits; i++)
+            {
+                byte b = data[offset + i];
+                if (b < '0' || b > '9') return false;
+                value = value * 10 + (b - '0');
+            }
+            return true;
+        }
+
+        private static bool TryParsePackedBcdLength(byte[] data, int offset, int digits, out int value, out int bytesConsumed)
+        {
+            value = 0;
+            bytesConsumed = 0;
+
+            // Packed BCD: each nibble is a digit. For LLVAR (2 digits) -> 1 byte. For LLLVAR (3 digits) -> 2 bytes (use first 3 nibbles).
+            int requiredNibbles = digits;
+            int requiredBytes = (requiredNibbles + 1) / 2;
+
+            if (offset + requiredBytes > data.Length) return false;
+
+            int nibblesRead = 0;
+            for (int i = 0; i < requiredBytes; i++)
+            {
+                byte b = data[offset + i];
+                byte high = (byte)((b >> 4) & 0x0F);
+                byte low = (byte)(b & 0x0F);
+
+                if (nibblesRead < requiredNibbles)
+                {
+                    if (high > 9) return false;
+                    value = value * 10 + high;
+                    nibblesRead++;
+                }
+                if (nibblesRead < requiredNibbles)
+                {
+                    if (low > 9) return false;
+                    value = value * 10 + low;
+                    nibblesRead++;
+                }
+            }
+
+            if (nibblesRead != requiredNibbles) return false;
+
+            bytesConsumed = requiredBytes;
+            return true;
+        }
 
     private static byte[] HexStringToBytes(string hex)
     {

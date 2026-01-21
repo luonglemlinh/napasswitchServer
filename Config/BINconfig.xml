@@ -29,13 +29,13 @@
     <Bank>
       <BankCode>BIDV</BankCode>
       <BankName>BIDV</BankName>
-      <IssuerCode>MB</IssuerCode>
-      <IssuerName>MB Bank</IssuerName>
+      <IssuerCode>BIDV</IssuerCode>
+      <IssuerName>BIDV</IssuerName>
       <Host>10.145.54.122</Host>
       <Port>7003</Port>
       <Timeout>30000</Timeout>
       <Bins>
-        <Bin>970418</Bin>
+        <!-- 970418 removed - now routes to default NAPAS TS -->
       </Bins>
     </Bank>
     <Bank>
@@ -49,6 +49,18 @@
       <Bins>
         <Bin>686868</Bin>
         <Bin>970436</Bin>
+      </Bins>
+    </Bank>
+    <Bank>
+      <BankCode>TS</BankCode>
+      <BankName>NAPAS TS</BankName>
+      <IssuerCode>NAPAS</IssuerCode>
+      <IssuerName>NAPAS Transaction Switch</IssuerName>
+      <Host>10.145.48.70</Host>
+      <Port>8386</Port>
+      <Timeout>30000</Timeout>
+      <IsDefault>true</IsDefault>
+      <Bins>
       </Bins>
     </Bank>
   </Banks>

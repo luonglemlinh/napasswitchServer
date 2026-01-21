@@ -21,6 +21,11 @@ namespace core.Models.Configuration
         public string Host { get; set; } = string.Empty;
         public int Port { get; set; }
         public int Timeout { get; set; }
+        
+        /// <summary>
+        /// If true, this issuer is used as fallback when no BIN match is found
+        /// </summary>
+        public bool IsDefault { get; set; } = false;
 
         [XmlArray("Bins")]
         [XmlArrayItem("Bin")]

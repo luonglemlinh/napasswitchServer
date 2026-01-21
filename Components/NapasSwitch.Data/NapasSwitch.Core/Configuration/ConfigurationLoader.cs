@@ -26,6 +26,9 @@ namespace core.Configuration
         private Dictionary<string, IssuerBankConfig> _binToIssuerMap = new();
         private Dictionary<string, AcquirerConfig> _acquirerMap = new();
         private Dictionary<string, string> _responseCodeMap = new();
+        
+        // Default/fallback issuer for when no BIN match is found
+        private IssuerBankConfig? _defaultIssuer;
 
         private ConfigurationLoader() { }
 
@@ -140,8 +143,17 @@ namespace core.Configuration
         private void BuildBinToIssuerMap()
         {
             _binToIssuerMap.Clear();
+            _defaultIssuer = null;
+            
             foreach (var bank in _binRouting!.Banks)
             {
+                // Check if this is the default/fallback issuer
+                if (bank.IsDefault)
+                {
+                    _defaultIssuer = bank;
+                    Console.WriteLine($"[CONFIG] Default issuer set to: {bank.IssuerName} ({bank.Host}:{bank.Port})");
+                }
+                
                 foreach (var bin in bank.AllBins)
                 {
                     _binToIssuerMap[bin] = bank;
@@ -171,9 +183,18 @@ namespace core.Configuration
 
         public IssuerBankConfig? GetIssuerByBIN(string cardBIN)
         {
-            return _binToIssuerMap.ContainsKey(cardBIN)
-                ? _binToIssuerMap[cardBIN]
-                : null;
+            // First try exact BIN match
+            if (_binToIssuerMap.ContainsKey(cardBIN))
+                return _binToIssuerMap[cardBIN];
+            
+            // If no match, return the default issuer (if configured)
+            if (_defaultIssuer != null)
+            {
+                Console.WriteLine($"[ROUTING] No BIN match for {cardBIN}, using default: {_defaultIssuer.IssuerName}");
+                return _defaultIssuer;
+            }
+            
+            return null;
         }
 
         public AcquirerConfig? GetAcquirerByCode(string acquirerCode)
