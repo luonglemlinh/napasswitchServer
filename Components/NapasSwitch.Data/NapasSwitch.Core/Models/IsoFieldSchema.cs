@@ -94,8 +94,8 @@ namespace core.ISO8583
             // DE25: POS Condition Code - Fixed 2 numeric
             schema.AddField(25, "POS Condition Code", FieldType.Fixed, fixedLength: 2);
             
-            // DE32: Acquiring Institution ID - Fixed 11 digits (NAPAS format, left-padded with zeros)
-            schema.AddField(32, "Acquiring Institution ID", FieldType.Fixed, fixedLength: 11);
+            // DE32: Acquiring Institution ID - Fixed 6 digits (NAPAS format)
+            schema.AddField(32, "Acquiring Institution ID", FieldType.Fixed, fixedLength: 6);
             
             // DE33: Forwarding Institution ID - LLVAR, max 11 digits
             schema.AddField(33, "Forwarding Institution ID", FieldType.Variable, maxLength: 11);

@@ -197,11 +197,12 @@ namespace router
             // DE11: STAN - 6 digits
             message.SetField(11, Interlocked.Increment(ref _stan).ToString("D6"));
             
-            // DE32: Acquirer ID - Fixed 11 digits, left-padded with zeros
+            // DE32: Acquirer ID - Fixed 6 digits
             string acquirerId = _tsConfig.IssuerCode ?? "970488";
-            message.SetField(32, acquirerId.PadLeft(11, '0'));
+            message.SetField(32, acquirerId.PadLeft(6, '0').Substring(0, 6));
             
-            // DE70: Network Management Information Code (301 = Echo test)
+            // DE70: Network Management Information Code
+            // 001 = Sign-on, 002 = Sign-off, 301 = Echo test, 161 = Key exchange
             message.SetField(70, networkCode);
 
             return message;
