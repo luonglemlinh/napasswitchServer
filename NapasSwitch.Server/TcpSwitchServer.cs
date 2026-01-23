@@ -483,7 +483,20 @@ public class TcpSwitchServer : IDisposable
                 Console.WriteLine($"   DE2 (PAN): {SecureDataHandler.MaskPAN(request.GetField(2))}");
                 Console.WriteLine($"   DE3 (Proc Code): {request.GetField(3)}");
                 Console.WriteLine($"   DE4 (Amount): {request.GetField(4)}");
+                Console.WriteLine($"   DE7 (Trans Date): {request.GetField(7)}");
                 Console.WriteLine($"   DE11 (STAN): {request.GetField(11)}");
+                Console.WriteLine($"   DE12 (Local Time): {request.GetField(12)}");
+                Console.WriteLine($"   DE13 (Local Date): {request.GetField(13)}");
+                Console.WriteLine($"   DE14 (Exp Date): {request.GetField(14)}");
+                Console.WriteLine($"   DE22 (POS Mode): {request.GetField(22)}");
+                Console.WriteLine($"   DE25 (POS Cond): {request.GetField(25)}");
+                Console.WriteLine($"   DE32 (Acq ID): {request.GetField(32)}");
+                Console.WriteLine($"   DE33 (Fwd ID): {request.GetField(33)}");
+                Console.WriteLine($"   DE37 (RRN): {request.GetField(37)}");
+                Console.WriteLine($"   DE41 (Term ID): {request.GetField(41)}");
+                Console.WriteLine($"   DE42 (Merch ID): {request.GetField(42)}");
+                Console.WriteLine($"   DE49 (Curr Code): {request.GetField(49)}");
+                Console.WriteLine($"   DE118 (National Use): {request.GetField(118)}");
 
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = null;

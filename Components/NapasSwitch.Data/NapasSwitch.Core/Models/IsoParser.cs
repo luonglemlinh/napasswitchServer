@@ -292,6 +292,8 @@ public class IsoParser
         return bytes;
     }
 
+    public bool UseHexBitmap { get; set; } = false;
+
     public byte[] Build(IsoMessage message)
     {
         if (string.IsNullOrWhiteSpace(message.MessageType))
@@ -345,6 +347,14 @@ public class IsoParser
             if (bitmap[bitIndex])
                 result[byteIndex] |= (byte)(1 << bitPos);
         }
+
+        if (UseHexBitmap)
+        {
+            // Convert 8 binary bytes to 16 ASCII Hex chars
+            string hex = BitConverter.ToString(result).Replace("-", "");
+            return Encoding.ASCII.GetBytes(hex);
+        }
+
         return result;
     }
 

@@ -121,19 +121,23 @@ namespace core.ISO8583
             // DE43: Card Acceptor Name/Location - Fixed 40 alphanumeric (right-padded with spaces)
             schema.AddField(43, "Card Acceptor Name/Location", FieldType.Fixed, fixedLength: 40);
             
-            // DE49: Currency Code - Fixed 3 numeric
+            // DE49: Currency Code - Transaction, Fixed 3 numeric
             schema.AddField(49, "Currency Code, Transaction", FieldType.Fixed, fixedLength: 3);
             
-            // DE52: PIN Block - Fixed 16 hex (8 bytes binary)
+            // DE52: PIN Data - Fixed 16 hex (8 bytes binary)
             schema.AddField(52, "PIN Data", FieldType.Fixed, fixedLength: 16);
             
-            // DE55: ICC Data - LLLVAR, max 999
+            // DE55: ICC System Related Data - LLLVAR, max 999
             var de55 = new IsoFieldDefinition(55, "ICC System Related Data", FieldType.Variable, maxLength: 999);
             de55.LengthEncoding = LengthEncoding.LLLVAR;
             schema.Fields[55] = de55;
             
             // DE70: Network Management Information Code - Fixed 3 numeric
             schema.AddField(70, "Network Management Information Code", FieldType.Fixed, fixedLength: 3);
+
+            // DE90: Original Data Elements - Fixed 42 numeric
+            schema.AddField(90, "Original Data Elements", FieldType.Fixed, fixedLength: 42);
+
 
             return schema;
         }

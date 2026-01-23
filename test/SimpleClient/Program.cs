@@ -101,10 +101,10 @@ namespace SimpleClient
             string? amountInput = Console.ReadLine()?.Trim() ?? "100000";
             
             Console.Write("Terminal ID (8 chars): ");
-            string? terminalId = Console.ReadLine()?.Trim() ?? "TERM0001";
+            string? terminalId = Console.ReadLine()?.Trim() ?? "00000001";
             
             Console.Write("Merchant ID (15 chars): ");
-            string? merchantId = Console.ReadLine()?.Trim() ?? "MERCHANT0000001";
+            string? merchantId = Console.ReadLine()?.Trim() ?? "NAPASMERCHANT01";
 
             var message = BuildPurchaseMessage(pan, amountInput, terminalId, merchantId);
             
@@ -172,24 +172,21 @@ namespace SimpleClient
             // DE3: Processing Code - 000000 = Purchase
             message.SetField(3, "000000");
             
-            // DE4: Amount - 12 digits, left-padded with zeros
+            // DE4: Amount - 12 digits, left-padded with zeros (User requested x100 conversion: 123456 -> 12345600)
             long amountValue = long.TryParse(amount, out long a) ? a : 100000;
-            message.SetField(4, amountValue.ToString("D12"));
+            message.SetField(4, (amountValue * 100).ToString("D12"));
 
-            // DE7: Tranmission Date
-            byte[] de7Bcd = PackBCD(now.ToString("MMddHHmmss"));
-            message.SetField(7, Encoding.ASCII.GetString(de7Bcd));
+            // DE7: Transmission Date - MMddHHmmss
+            message.SetField(7, now.ToString("MMddHHmmss"));
 
             // DE11: STAN - 6 digits
             message.SetField(11, (_stan++).ToString("D6"));
 
-            // DE12: Local Time - packed BCD (3 bytes = 6 nibbles = HHmmss)
-            byte[] de12Bcd = PackBCD(now.ToString("HHmmss"));
-            message.SetField(12, Encoding.ASCII.GetString(de12Bcd));
+            // DE12: Local Time - HHmmss
+            message.SetField(12, now.ToString("HHmmss"));
 
-            // DE13: Local Date - packed BCD (2 bytes = 4 nibbles = MMdd)
-            byte[] de13Bcd = PackBCD(now.ToString("MMdd"));
-            message.SetField(13, Encoding.ASCII.GetString(de13Bcd));
+            // DE13: Local Date - MMdd
+            message.SetField(13, now.ToString("MMdd"));
 
             // DE14: Expiry Date - YYMM
             message.SetField(14, "2512");
@@ -263,8 +260,8 @@ namespace SimpleClient
             // DE25: POS Condition Code
             message.SetField(25, "00");
             
-            // DE32: Acquirer ID
-            message.SetField(32, "970400");
+            // DE32: Acquirer ID - Match Tutor's Spec (970488)
+            message.SetField(32, "970488");
             
             // DE37: RRN
             message.SetField(37, now.ToString("yyMMddHHmmss"));

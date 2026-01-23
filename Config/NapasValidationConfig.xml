@@ -189,8 +189,8 @@
       <MinLength>6</MinLength>
       <MaxLength>11</MaxLength>
       <DataType>N</DataType>
-      <Pattern>^[0-9]{6,11}$</Pattern>
-      <RequiredIn></RequiredIn>
+      <Pattern>^[0-9]{1,11}$</Pattern>
+      <RequiredIn>0200,0210,0400,0410,0800,0810</RequiredIn>
       <ErrorCode>03</ErrorCode>
       <ErrorMessage>Invalid acquirer ID - must be 6-11 numeric digits</ErrorMessage>
     </DataElement>
@@ -265,9 +265,9 @@
     <DataElement Number="42" Name="DE42_MerchantID" Description="Card acceptor identification code">
       <MinLength>15</MinLength>
       <MaxLength>15</MaxLength>
-      <DataType>AN</DataType>
+      <DataType>ANS</DataType>
       <Pattern>^[a-zA-Z0-9\s]{15}$</Pattern>
-      <RequiredIn>0200,0210,0400,0410,0420,0430</RequiredIn>
+      <RequiredIn>0200,0400,0410,0420,0430</RequiredIn>
       <ErrorCode>03</ErrorCode>
       <ErrorMessage>Invalid merchant ID - must be 15 alphanumeric characters</ErrorMessage>
     </DataElement>
