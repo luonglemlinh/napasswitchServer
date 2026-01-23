@@ -395,14 +395,14 @@
     </DataElement>
 
     <!-- DE#63 -->
-    <DataElement Number="63" Name="" Description="">
+    <DataElement Number="63" Name="DE63_TransactionReferenceNumber" Description="Transaction reference number (TRN)">
       <MinLength>1</MinLength>
       <MaxLength>16</MaxLength>
       <DataType>ANS</DataType>
       <Pattern></Pattern>
       <RequiredIn></RequiredIn>
       <ErrorCode>30</ErrorCode>
-      <ErrorMessage>Invalid transaction reference number</ErrorMessage>
+      <ErrorMessage>Invalid transaction reference number - max 16 characters</ErrorMessage>
     </DataElement>
 
     <!-- DE#70 -->

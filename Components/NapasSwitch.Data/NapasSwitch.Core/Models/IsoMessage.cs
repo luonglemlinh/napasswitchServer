@@ -63,6 +63,12 @@ namespace core.Models
         public void SetIssuerID(string value) => SetField(33, value);
 
         
+        /// Field 63: Transaction Reference Number (TRN)
+        
+        public string? GetTRN() => GetField(63);
+        public void SetTRN(string value) => SetField(63, value);
+
+        
         /// Field 39: Response Code
         /// "00" = Approved, "51" = Insufficient Funds, etc.
         

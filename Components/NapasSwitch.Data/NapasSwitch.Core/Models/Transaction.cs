@@ -15,6 +15,7 @@ namespace core.Models
         public required string Amount { get; set; }
         public required string ResponseCode { get; set; }
         public string? ResponseDescription { get; set; }
+        public string? TRN { get; set; }
         public DateTime CreatedAt { get; set; } = DateTime.UtcNow;
         public TimeSpan ProcessingTime { get; set; }
     }

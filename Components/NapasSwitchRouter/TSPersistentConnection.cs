@@ -294,8 +294,23 @@ namespace router
             message.SetField(7, now.ToString("MMddHHmmss"));
             message.SetField(11, Interlocked.Increment(ref _stan).ToString("D6"));
             
-             // DE32: Acquirer ID - Fixed 6 digits (using config)
+            // DE32: Acquiring Institution Identification Code (NAPAS Requirement)
+            // Specification: n..11, LLVAR encoding
+            // - This field is REQUIRED in all messages for transaction routing
+            // - Contains Acquirer's ID number (typically 6-digit BIN code)
+            // - Encoded as: [2-byte length][variable data]
+            // - Length field: Zero-padded ASCII (e.g., "06" for 6 digits)
+            // Example: Acquirer ID "970400" → Wire format "06970400"
+            //          where "06" indicates 6 digits follow, then "970400" is the actual ID
             string acquirerId = _tsConfig.IssuerCode ?? "970488";
+            
+            // Validate acquirer ID format (should be 6-11 numeric digits per NAPAS)
+            if (string.IsNullOrEmpty(acquirerId) || acquirerId.Length < 6 || acquirerId.Length > 11)
+            {
+                Console.WriteLine($"[TS-WARN] Invalid Acquirer ID '{acquirerId}', using default '970488'");
+                acquirerId = "970400";
+            }
+            
             message.SetField(32, acquirerId);
 
             message.SetField(70, networkCode);
@@ -305,6 +320,13 @@ namespace router
         public async Task<IsoMessage?> ForwardTransactionAsync(IsoMessage request, string sessionId)
         {
             if (!IsConnected) await ConnectAsync();
+            
+            // Log all fields being forwarded to TS for debugging
+            Console.WriteLine($"[{sessionId}] [TS-FWD] Forwarding to TS with fields:");
+            foreach (var field in request.Fields.OrderBy(f => f.Key))
+            {
+                Console.WriteLine($"  DE{field.Key}: {field.Value}");
+            }
             
             try
             {
