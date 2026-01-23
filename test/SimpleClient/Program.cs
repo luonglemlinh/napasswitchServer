@@ -175,19 +175,22 @@ namespace SimpleClient
             // DE4: Amount - 12 digits, left-padded with zeros
             long amountValue = long.TryParse(amount, out long a) ? a : 100000;
             message.SetField(4, amountValue.ToString("D12"));
-            
-            // DE7: Transmission DateTime - MMddHHmmss (10 digits)
-            message.SetField(7, now.ToString("MMddHHmmss"));
-            
+
+            // DE7: Tranmission Date
+            byte[] de7Bcd = PackBCD(now.ToString("MMddHHmmss"));
+            message.SetField(7, Encoding.ASCII.GetString(de7Bcd));
+
             // DE11: STAN - 6 digits
             message.SetField(11, (_stan++).ToString("D6"));
-            
-            // DE12: Local Time - HHmmss (6 digits, 24-hour)
-            message.SetField(12, now.ToString("HHmmss"));
-            
-            // DE13: Local Date - MMdd (4 digits)
-            message.SetField(13, now.ToString("MMdd"));
-            
+
+            // DE12: Local Time - packed BCD (3 bytes = 6 nibbles = HHmmss)
+            byte[] de12Bcd = PackBCD(now.ToString("HHmmss"));
+            message.SetField(12, Encoding.ASCII.GetString(de12Bcd));
+
+            // DE13: Local Date - packed BCD (2 bytes = 4 nibbles = MMdd)
+            byte[] de13Bcd = PackBCD(now.ToString("MMdd"));
+            message.SetField(13, Encoding.ASCII.GetString(de13Bcd));
+
             // DE14: Expiry Date - YYMM
             message.SetField(14, "2512");
             

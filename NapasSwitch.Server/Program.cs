@@ -7,7 +7,7 @@ namespace server
 {
     class Program
     {
-        static void Main(string[] args)
+        static async System.Threading.Tasks.Task Main(string[] args)
         {
             Console.Title = "NAPAS Payment Switch Server";
             
@@ -94,11 +94,11 @@ namespace server
                 }
 
                 // Step 5: Connect to TS (persistent connection)
-                Console.WriteLine("\n[TS] Establishing persistent connection to Transaction Switch...");
-                server.ConnectToTSAsync().Wait();
+                Console.WriteLine("\n[TS] Connecting to Transaction Switch...");
+                await server.ConnectToTSAsync(); // Use await, don't block with .Wait()
 
                 Console.WriteLine();
-                
+
                 // Start server (this blocks)
                 server.Start();
             }

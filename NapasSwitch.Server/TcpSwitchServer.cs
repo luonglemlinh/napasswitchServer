@@ -104,27 +104,27 @@ public class TcpSwitchServer : IDisposable
         }
     }
 
-    /// <summary>
-    /// Connect to TS (call after configurations are loaded)
-    /// </summary>
-    public async Task ConnectToTSAsync()
-    {
-        if (_tsConnection != null)
+        /// <summary>
+        /// Connect to TS (call after configurations are loaded)
+        /// </summary>
+        public async Task ConnectToTSAsync()
         {
-            Console.WriteLine("[TS] Establishing persistent connection to Transaction Switch...");
-            bool connected = await _tsConnection.ConnectAsync();
-            if (connected)
+            if (_tsConnection != null)
             {
-                Console.WriteLine("[TS] Persistent connection established successfully!");
-            }
-            else
-            {
-                Console.WriteLine("[TS] WARNING: Failed to establish persistent connection. Will retry on first transaction.");
+                Console.WriteLine("[TS] Establishing persistent connection...");
+                bool connected = await _tsConnection.ConnectAsync();
+                if (connected)
+                {
+                    Console.WriteLine("[TS] ✓ Connected successfully!");
+                }
+                else
+                {
+                    Console.WriteLine("[TS] ✗ Failed to connect");
+                }
             }
         }
-    }
-        
-    private string FindValidationConfigPath()
+
+        private string FindValidationConfigPath()
         {
             var searchPaths = new[]
             {

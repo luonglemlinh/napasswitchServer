@@ -19,7 +19,7 @@ namespace network.Validation
         {
             return IsValid 
                 ? $"DE{DataElementNumber} ({DataElementName}): VALID" 
-                : $"DE{DataElementNumber} ({DataElementName}): {ErrorCode} - {ErrorMessage}";
+                : $"DE{DataElementNumber} ({DataElementName}): {ErrorCode} - {ErrorMessage} (Actual: '{ActualValue}')";
         }
     }
 

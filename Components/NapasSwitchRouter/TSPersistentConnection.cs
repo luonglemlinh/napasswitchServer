@@ -191,18 +191,19 @@ namespace router
                 MessageType = "0800"
             };
 
+
+
             // DE7: Transmission DateTime - MMddHHmmss
             message.SetField(7, now.ToString("MMddHHmmss"));
-            
+
             // DE11: STAN - 6 digits
             message.SetField(11, Interlocked.Increment(ref _stan).ToString("D6"));
-            
-            // DE32: Acquirer ID - Fixed 6 digits
+
+            // DE32: Acquirer ID - LLVAR format (length prefix + value)
             string acquirerId = _tsConfig.IssuerCode ?? "970488";
-            message.SetField(32, acquirerId.PadLeft(6, '0').Substring(0, 6));
-            
+            message.SetField(32, acquirerId);
+
             // DE70: Network Management Information Code
-            // 001 = Sign-on, 002 = Sign-off, 301 = Echo test, 161 = Key exchange
             message.SetField(70, networkCode);
 
             return message;
@@ -261,39 +262,41 @@ namespace router
             if (_stream == null)
                 throw new InvalidOperationException("Not connected to TS");
 
-            // NAPAS protocol header (12 bytes)
-            byte[] napasHeader = System.Text.Encoding.ASCII.GetBytes("NAPASBASE.ISO");
-            
+            // NAPAS protocol: [4-byte ASCII length]["NAPASBASE.ISO"][ISO message]
+            const string NAPAS_HEADER = "NAPASBASE.ISO";
+            byte[] napasHeaderBytes = System.Text.Encoding.ASCII.GetBytes(NAPAS_HEADER);
+
             // Build ISO message
             byte[] isoBytes = _parser.Build(request);
-            
-            // Combine: NAPASBASE.ISO + ISO message
-            byte[] requestBytes = new byte[napasHeader.Length + isoBytes.Length];
-            Array.Copy(napasHeader, 0, requestBytes, 0, napasHeader.Length);
-            Array.Copy(isoBytes, 0, requestBytes, napasHeader.Length, isoBytes.Length);
 
-            // Log outgoing message
-            Console.WriteLine($"[{sessionId}] [TS-SEND] Sending {requestBytes.Length} bytes to TS (Header + ISO)");
-            Console.WriteLine($"[{sessionId}] [TS-SEND] Header: NAPASBASE.ISO");
-            Console.WriteLine($"[{sessionId}] [TS-SEND] ISO HEX: {BitConverter.ToString(isoBytes).Replace("-", " ")}");
+            // Total payload = NAPAS header + ISO message
+            int totalLength = napasHeaderBytes.Length + isoBytes.Length;
 
-            // Prepare length header (2 bytes, big-endian) - includes NAPASBASE.ISO + ISO message
-            byte[] lengthHeader = new byte[2];
-            lengthHeader[0] = (byte)(requestBytes.Length >> 8);
-            lengthHeader[1] = (byte)(requestBytes.Length & 0xFF);
+            // CRITICAL: 4-byte ASCII length header (NOT 2-byte binary!)
+            string lengthStr = totalLength.ToString("D4"); // "0063", "0065", etc.
+            byte[] lengthHeader = System.Text.Encoding.ASCII.GetBytes(lengthStr);
+
+            // Full message: [4-byte ASCII length][NAPAS header][ISO message]
+            byte[] fullMessage = new byte[4 + totalLength];
+            Array.Copy(lengthHeader, 0, fullMessage, 0, 4);
+            Array.Copy(napasHeaderBytes, 0, fullMessage, 4, napasHeaderBytes.Length);
+            Array.Copy(isoBytes, 0, fullMessage, 4 + napasHeaderBytes.Length, isoBytes.Length);
+
+            Console.WriteLine($"[{sessionId}] [TS-SEND] Total: {fullMessage.Length} bytes");
+            Console.WriteLine($"[{sessionId}] [TS-SEND] Length Header (ASCII): {lengthStr}");
+            Console.WriteLine($"[{sessionId}] [TS-SEND] NAPAS Header: {NAPAS_HEADER}");
+            Console.WriteLine($"[{sessionId}] [TS-SEND] ISO Payload: {isoBytes.Length} bytes");
 
             lock (_connectionLock)
             {
-                // Send length + NAPASBASE.ISO + ISO message
-                _stream.Write(lengthHeader, 0, 2);
-                _stream.Write(requestBytes, 0, requestBytes.Length);
+                _stream.Write(fullMessage, 0, fullMessage.Length);
                 _stream.Flush();
             }
 
-            // Read response
-            byte[] responseLengthBytes = new byte[2];
-            int bytesRead = await _stream.ReadAsync(responseLengthBytes, 0, 2);
-            
+            // Read response: [4-byte ASCII length][NAPAS header][ISO message]
+            byte[] respLengthBytes = new byte[4];
+            int bytesRead = await _stream.ReadAsync(respLengthBytes, 0, 4);
+
             if (bytesRead == 0)
             {
                 Console.WriteLine($"[{sessionId}] [TS-RECV] Connection closed by TS");
@@ -301,7 +304,14 @@ namespace router
                 return null;
             }
 
-            int responseLength = (responseLengthBytes[0] << 8) | responseLengthBytes[1];
+            string respLengthStr = System.Text.Encoding.ASCII.GetString(respLengthBytes);
+            if (!int.TryParse(respLengthStr, out int responseLength))
+            {
+                Console.WriteLine($"[{sessionId}] [TS-RECV] Invalid length header: {respLengthStr}");
+                _isConnected = false;
+                return null;
+            }
+
             Console.WriteLine($"[{sessionId}] [TS-RECV] Expecting {responseLength} bytes");
 
             byte[] responseBytes = new byte[responseLength];
@@ -311,7 +321,7 @@ namespace router
                 bytesRead = await _stream.ReadAsync(responseBytes, totalRead, responseLength - totalRead);
                 if (bytesRead == 0)
                 {
-                    Console.WriteLine($"[{sessionId}] [TS-RECV] Connection closed while reading response");
+                    Console.WriteLine($"[{sessionId}] [TS-RECV] Connection closed while reading");
                     _isConnected = false;
                     return null;
                 }
@@ -319,18 +329,17 @@ namespace router
             }
 
             Console.WriteLine($"[{sessionId}] [TS-RECV] Received {totalRead} bytes");
-            Console.WriteLine($"[{sessionId}] [TS-RECV] HEX: {BitConverter.ToString(responseBytes).Replace("-", " ")}");
 
-            // Skip NAPASBASE.ISO header (13 bytes) if present
-            const int NAPAS_HEADER_LENGTH = 13; // "NAPASBASE.ISO"
+            // Skip NAPAS header (13 bytes) if present
+            const int NAPAS_HEADER_LENGTH = 13;
             byte[] isoResponseBytes;
-            
+
             if (responseLength > NAPAS_HEADER_LENGTH)
             {
                 string possibleHeader = System.Text.Encoding.ASCII.GetString(responseBytes, 0, NAPAS_HEADER_LENGTH);
-                if (possibleHeader == "NAPASBASE.ISO")
+                if (possibleHeader == NAPAS_HEADER)
                 {
-                    Console.WriteLine($"[{sessionId}] [TS-RECV] Skipping NAPASBASE.ISO header");
+                    Console.WriteLine($"[{sessionId}] [TS-RECV] Skipping NAPAS header");
                     isoResponseBytes = new byte[responseLength - NAPAS_HEADER_LENGTH];
                     Array.Copy(responseBytes, NAPAS_HEADER_LENGTH, isoResponseBytes, 0, isoResponseBytes.Length);
                 }
@@ -346,6 +355,8 @@ namespace router
 
             return _parser.Parse(isoResponseBytes);
         }
+
+
 
         /// <summary>
         /// Reconnect to TS
