@@ -500,33 +500,36 @@ public class TcpSwitchServer : IDisposable
                 
                 Console.WriteLine($" [{sessionId}] Validation PASSED");
                 Console.WriteLine($" [{sessionId}] Message Details:");
-                Console.WriteLine($"   MTI: {request.MessageType}");
-                Console.WriteLine($"   DE2 (PAN): {SecureDataHandler.MaskPAN(request.GetField(2))}");
-                Console.WriteLine($"   DE3 (Proc Code): {request.GetField(3)}");
-                Console.WriteLine($"   DE4 (Amount): {request.GetField(4)}");
-                Console.WriteLine($"   DE7 (Trans Date): {request.GetField(7)}");
-                Console.WriteLine($"   DE11 (STAN): {request.GetField(11)}");
-                Console.WriteLine($"   DE12 (Local Time): {request.GetField(12)}");
-                Console.WriteLine($"   DE13 (Local Date): {request.GetField(13)}");
-                Console.WriteLine($"   DE14 (Exp Date): {request.GetField(14)}");
-                Console.WriteLine($"   DE22 (POS Mode): {request.GetField(22)}");
-                Console.WriteLine($"   DE25 (POS Cond): {request.GetField(25)}");
+                if (request.HasField(0))
+                {
+                    Console.WriteLine($"   000: {request.GetField(0)}");
+                }
+                Console.WriteLine($"   Type: {request.MessageType}");
+                Console.WriteLine($"   002: {SecureDataHandler.MaskPAN(request.GetField(2))}");
+                Console.WriteLine($"   003: {request.GetField(3)}");
+                Console.WriteLine($"   004: {request.GetField(4)}");
+                Console.WriteLine($"   007: {request.GetField(7)}");
+                Console.WriteLine($"   011: {request.GetField(11)}");
+                Console.WriteLine($"   012: {request.GetField(12)}");
+                Console.WriteLine($"   013: {request.GetField(13)}");
+                Console.WriteLine($"   014: {request.GetField(14)}");
+                Console.WriteLine($"   022: {request.GetField(22)}");
+                Console.WriteLine($"   025: {request.GetField(25)}");
                 
                 // DE32: Show actual value and explain LLVAR encoding
                 string? de32Value = request.GetField(32);
                 if (!string.IsNullOrEmpty(de32Value))
                 {
-                    // Note: The raw wire format would be: [2-byte length][actual value]
-                    // E.g., "970400" on wire = "06970400" where "06" is the length prefix
-                    Console.WriteLine($"   DE32 (Acq ID): {de32Value} (LLVAR encoded as: {de32Value.Length:D2}{de32Value})");
+                    Console.WriteLine($"   032: {de32Value} (LLVAR encoded as: {de32Value.Length:D2}{de32Value})");
                 }
                 
-                Console.WriteLine($"   DE33 (Fwd ID): {request.GetField(33)}");
-                Console.WriteLine($"   DE37 (RRN): {request.GetField(37)}");
-                Console.WriteLine($"   DE41 (Term ID): {request.GetField(41)}");
-                Console.WriteLine($"   DE42 (Merch ID): {request.GetField(42)}");
-                Console.WriteLine($"   DE49 (Curr Code): {request.GetField(49)}");
-                Console.WriteLine($"   DE63 (TRN): {request.GetTRN()}");
+                Console.WriteLine($"   033: {request.GetField(33)}");
+                Console.WriteLine($"   035: {request.GetField(35)}");
+                Console.WriteLine($"   037: {request.GetField(37)}");
+                Console.WriteLine($"   041: {request.GetField(41)}");
+                Console.WriteLine($"   042: {request.GetField(42)}");
+                Console.WriteLine($"   049: {request.GetField(49)}");
+                Console.WriteLine($"   063: {request.GetTRN()}");
 
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = null;

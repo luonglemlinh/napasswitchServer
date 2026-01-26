@@ -1,4 +1,4 @@
-using System;
+    using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -284,31 +284,7 @@ namespace network.Validation
             var results = new List<DataElementValidationResult>();
             var mti = message.MessageType;
 
-            // Base required fields for financial transactions (0200/0400)
-            // Only enforce truly essential fields - let config handle the rest
-            if (mti == "0200" || mti == "0400")
-            {
-                // These are essential for routing and processing
-                int[] baseRequired = { 2, 3, 4, 11 }; // PAN, ProcessingCode, Amount, STAN
-                foreach (var de in baseRequired)
-                {
-                    if (!message.Fields.ContainsKey(de))
-                    {
-                        results.Add(BuildMissingResult(de, mti));
-                    }
-                }
-            }
-
-            // Track-2 vs Manual Entry requirements: enforce DE14 when DE35 is absent
-            if (!message.Fields.ContainsKey(35) && (mti == "0200" || mti == "0400"))
-            {
-                if (!message.Fields.ContainsKey(14))
-                {
-                    results.Add(BuildMissingResult(14, mti));
-                }
-            }
-
-            // Existing configuration-based RequiredIn rules
+            // Dynamic validation based on XML configuration (RequiredIn tags)
             foreach (var kvp in _dataElementDefinitions)
             {
                 var definition = kvp.Value;

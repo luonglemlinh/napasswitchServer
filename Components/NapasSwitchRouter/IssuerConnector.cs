@@ -341,11 +341,8 @@ namespace router
         private static string MaskTrack2(string? track2)
         {
             if (string.IsNullOrEmpty(track2)) return "";
-            int separatorIndex = track2.IndexOfAny(new[] { '=', 'D', 'd' });
-            if (separatorIndex < 0) return SecureDataHandler.MaskPAN(track2);
-            string pan = track2[..separatorIndex];
-            string tail = track2[separatorIndex..];
-            return $"{SecureDataHandler.MaskPAN(pan)}{tail[..1]}****";
+            // TESTING: Unmasking per user request
+            return track2;
         }
     }
 }
