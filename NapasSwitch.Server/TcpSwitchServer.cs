@@ -332,16 +332,15 @@ public class TcpSwitchServer : IDisposable
                     // Step 4: Send response back to client
                     if (responseBytes != null && responseBytes.Length > 0)
                     {
-                        // Write length header
-                        byte[] responseLengthBytes = new byte[2];
-                        responseLengthBytes[0] = (byte)(responseBytes.Length >> 8);
-                        responseLengthBytes[1] = (byte)(responseBytes.Length & 0xFF);
-
-                        stream.Write(responseLengthBytes, 0, 2);
+                        // Write length header (4-byte ASCII per NAPAS specification)
+                        string respLengthStr = responseBytes.Length.ToString("D4");
+                        byte[] lengthHeader = System.Text.Encoding.ASCII.GetBytes(respLengthStr);
+ 
+                        stream.Write(lengthHeader, 0, 4);
                         stream.Write(responseBytes, 0, responseBytes.Length);
                         stream.Flush();
-
-                        Console.WriteLine($" [{sessionId}] Sent {responseBytes.Length} bytes response\n");
+ 
+                        Console.WriteLine($" [{sessionId}] Sent {responseBytes.Length} bytes response (Length Header: {respLengthStr})\n");
                     }
 
                     // Update session stats
@@ -445,6 +444,30 @@ public class TcpSwitchServer : IDisposable
                 try {
                     request = _parser.Parse(messageBytes);
                     
+                    // Normalize Track 2 (DE#35) for WAY4 compliance (Max 37, separator 'D', no 'F' padding, strip sentinels)
+                    if (request.HasField(35))
+                    {
+                        string track2 = request.GetField(35)!;
+                        
+                        // 1. Strip sentinels if present (';', '?', and others per ISO 7813)
+                        track2 = track2.Trim(';', '?', ' ');
+
+                        // 2. Strip 'F' padding characters (often found in chip data)
+                        track2 = track2.Replace("F", "").Replace("f", "");
+
+                        // 3. Normalize all separators ('=' -> 'D')
+                        // Per ISO-8583 DE35, 'D' (0x44) is the field separator
+                        track2 = track2.Replace('=', 'D');
+
+                        // 4. Truncate to 37 characters if it's too long (WAY4 limit)
+                        if (track2.Length > 37)
+                        {
+                             track2 = track2.Substring(0, 37);
+                        }
+                        
+                        request.SetField(35, track2);
+                    }
+
                     // TESTING: Print F00 Header
                     if (!string.IsNullOrEmpty(request.Header))
                     {
@@ -663,28 +686,26 @@ public class TcpSwitchServer : IDisposable
             }
 
             Console.WriteLine($" [{sessionId}] Routing to ISS: {issuerBank.IssuerName} ({issuerBank.IssuerCode})");
-
+ 
             // NAPAS Routing Logic:
-            // DE#32 (Acquiring Institution ID): MUST be the Acquirer (e.g. 970400), NOT the Switch (970488)
+            // DE#32 (Acquiring Institution ID): MUST be the Acquirer (e.g. 970418), NOT the Switch (970488)
             // DE#33 (Forwarding Institution ID): Equal to Switch ID (970488)
             
-            string currentDe32 = request.GetField(32) ?? string.Empty;
             string switchId = issuerBank.IssuerCode; // 970488 for NAPAS TS
-
+            string defaultAcquirer = "970418"; // BIDV
+ 
             // 1. Handle DE#32 (Acquirer ID)
+            string currentDe32 = request.GetField(32) ?? string.Empty;
             if (string.IsNullOrEmpty(currentDe32))
             {
-                // Missing? Set default 970400
-                request.SetField(32, "970400");
-                Console.WriteLine($" [{sessionId}] DE#32 missing, setting default: 970400");
+                request.SetField(32, defaultAcquirer);
+                Console.WriteLine($" [{sessionId}] DE#32 missing, setting default: {defaultAcquirer}");
             }
             else if (currentDe32 == switchId && issuerBank.IsDefault)
             {
                 // CRITICAL FIX: If DE#32 equals Switch ID (970488), it's logically wrong for TS routing.
-                // The Switch cannot be the Acquirer for the TS.
-                // Force it back to default Acquirer ID (970400).
-                request.SetField(32, "970400");
-                Console.WriteLine($" [{sessionId}] DE#32 was {currentDe32} (Switch ID), forced to 970400 (Acquirer ID) to prevent RC:30");
+                request.SetField(32, defaultAcquirer);
+                Console.WriteLine($" [{sessionId}] DE#32 was {currentDe32} (Switch ID), forced to {defaultAcquirer} (Acquirer ID) to prevent RC:30");
             }
             else
             {

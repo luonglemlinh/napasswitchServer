@@ -417,9 +417,9 @@ public class IsoParser
     /// LLLVAR: 3-byte length prefix (zero-padded) + variable data
     /// 
     /// Example for DE#32 with LLVAR:
-    ///   Input: "970400" (6 chars)
+    ///   Input: "970418" (6 chars)
     ///   Length: 6 → "06" (2 bytes, zero-padded)
-    ///   Output: "06970400" (8 bytes total)
+    ///   Output: "06970418" (8 bytes total)
     /// </summary>
     private IEnumerable<byte> BuildVariableField(LengthEncoding encoding, string value)
     {

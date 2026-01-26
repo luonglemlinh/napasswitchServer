@@ -198,12 +198,12 @@
     <!-- DE#35 -->
     <DataElement Number="35" Name="" Description="">
       <MinLength>1</MinLength>
-      <MaxLength>40</MaxLength>
+      <MaxLength>37</MaxLength>
       <DataType>Z</DataType>
-      <Pattern>^[0-9D]{1,40}$</Pattern>
+      <Pattern>^([0-9]{1,19})D([0-9]{4}|D)([0-9]{3}|D)([0-9D]{0,10})$</Pattern>
       <RequiredIn></RequiredIn>
       <ErrorCode>30</ErrorCode>
-      <ErrorMessage>Invalid Track 2 data</ErrorMessage>
+      <ErrorMessage>Invalid Track 2 structure - must follow ISO 7813/Wiki format [PAN]D[ED]D[SC][DD]</ErrorMessage>
     </DataElement>
 
     <!-- DE#36 -->

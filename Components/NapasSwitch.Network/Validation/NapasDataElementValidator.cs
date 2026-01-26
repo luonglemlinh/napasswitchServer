@@ -156,6 +156,41 @@ namespace network.Validation
                 result.AddDataElementResult(deResult);
             }
 
+            // 3. Custom cross-field validation for DE#35 (Track 2) vs DE#22 (POS Entry Mode)
+            if (message.HasField(35) && message.HasField(22))
+            {
+                string posMode = message.GetField(22)!;
+                string track2 = message.GetField(35)!;
+                
+                // Chip transactions: 05, 07, 91 (per Napas spec prefixes)
+                bool isChip = posMode.StartsWith("05") || posMode.StartsWith("07") || posMode.StartsWith("91");
+                
+                if (isChip)
+                {
+                    // Match based on ISO 7813 structure: [PAN]D[ED]D[SC][DD]
+                    var match = Regex.Match(track2, @"^([0-9]{1,19})D([0-9]{4}|D)([0-9]{3}|D)([0-9D]{0,10})$");
+                    if (match.Success)
+                    {
+                        string scGroup = match.Groups[3].Value;
+                        if (!string.IsNullOrEmpty(scGroup) && scGroup != "D")
+                        {
+                            char scFirst = scGroup[0];
+                            if (scFirst != '2' && scFirst != '6')
+                            {
+                                result.AddDataElementResult(new DataElementValidationResult
+                                {
+                                    DataElementNumber = 35,
+                                    DataElementName = "Track-2 Data",
+                                    IsValid = false,
+                                    ErrorCode = "30",
+                                    ErrorMessage = $"Service Code first digit '{scFirst}' is invalid for chip transaction (must be 2 or 6)"
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
             if (!result.IsValid)
             {
                 result.OverallErrorCode = result.GetFirstErrorCode();

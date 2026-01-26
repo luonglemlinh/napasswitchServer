@@ -103,8 +103,8 @@ namespace core.ISO8583
             // DE33: Forwarding Institution ID - LLVAR, max 11 digits
             schema.AddField(33, "Forwarding Institution ID", FieldType.Variable, maxLength: 11);
             
-            // DE35: Track 2 Data - LLVAR, max 40
-            var de35 = new IsoFieldDefinition(35, "Track 2 Data", FieldType.Variable, maxLength: 40);
+            // DE35: Track 2 Data - LLVAR, max 37
+            var de35 = new IsoFieldDefinition(35, "Track 2 Data", FieldType.Variable, maxLength: 37);
             de35.LengthEncoding = LengthEncoding.LLVAR;
             schema.Fields[35] = de35;
             
