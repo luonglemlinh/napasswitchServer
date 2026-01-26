@@ -209,9 +209,9 @@ public class TcpSwitchServer : IDisposable
                     TcpClient client = _listener.AcceptTcpClient();
 
                     // KEY CONCEPT: Instead of handling the client HERE,
-                    // we give it to the ThreadPool to handle in a separate thread!
+                    // we use Task.Run to handle it in a separate task!
                     // This allows us to immediately return and accept the next connection
-                    ThreadPool.QueueUserWorkItem(HandleClient, client);
+                    _ = Task.Run(() => HandleClientAsync(client));
 
                     Console.WriteLine($" New connection accepted. Active sessions: {_activeSessions.Count}");
                 }
@@ -224,12 +224,10 @@ public class TcpSwitchServer : IDisposable
         }
 
 
-        /// This method runs in a SEPARATE THREAD for each connected client!
+        /// This method runs in a SEPARATE TASK for each connected client!
 
-        private void HandleClient(object? obj)
+        private async Task HandleClientAsync(TcpClient client)
         {
-            if (obj is not TcpClient client) return;
-
             // Generate unique session ID for this connection
             string sessionId = Guid.NewGuid().ToString("N")[..8];
             NetworkStream? stream = null;
@@ -309,7 +307,6 @@ public class TcpSwitchServer : IDisposable
                     PrintRawMessage(messageBytes, sessionId);
 
                     byte[] isoPayload = messageBytes;
-                    int headerLen = 0;
 
                     // Try: assume 5-byte TPDU header (common ISO8583 framing)
                     if (messageLength > 5)
@@ -323,7 +320,6 @@ public class TcpSwitchServer : IDisposable
 
                         if (looksLikeIsoAtOffset5)
                         {
-                            headerLen = 5;
                             isoPayload = messageBytes[5..];
                             Console.WriteLine($" [{sessionId}] Detected 5-byte TPDU header. ISO payload starts at byte 5 ({isoPayload.Length} bytes).");
                             Console.WriteLine($" [{sessionId}] First 20 bytes of ISO: {BitConverter.ToString(isoPayload, 0, Math.Min(20, isoPayload.Length))}");
@@ -331,7 +327,7 @@ public class TcpSwitchServer : IDisposable
                     }
 
                     // Step 3: Process the message and get response
-                    byte[]? responseBytes = ProcessMessage(isoPayload, sessionId);
+                    byte[]? responseBytes = await ProcessMessageAsync(isoPayload, sessionId);
 
                     // Step 4: Send response back to client
                     if (responseBytes != null && responseBytes.Length > 0)
@@ -430,7 +426,7 @@ public class TcpSwitchServer : IDisposable
         /// Process an incoming ISO-8583 message
         /// This is where the routing magic happens!
         
-        private byte[]? ProcessMessage(byte[] messageBytes, string sessionId)
+        private async Task<byte[]?> ProcessMessageAsync(byte[] messageBytes, string sessionId)
         {
             var stopwatch = Stopwatch.StartNew();
             TransactionContext? txnContext = null;
@@ -555,8 +551,8 @@ public class TcpSwitchServer : IDisposable
 
                 IsoMessage response = request.MessageType switch
                 {
-                    "0200" => HandleAuthorizationRequest(request, sessionId, txnContext),
-                    "0400" => HandleReversalRequest(request, sessionId, txnContext),
+                    "0200" => await HandleAuthorizationRequestAsync(request, sessionId, txnContext),
+                    "0400" => await HandleReversalRequestAsync(request, sessionId, txnContext),
                     "0800" => HandleNetworkManagement(request, sessionId),
                     _ => CreateErrorResponse(request, "12")
                 };
@@ -637,7 +633,7 @@ public class TcpSwitchServer : IDisposable
 
      
      
-        private IsoMessage HandleAuthorizationRequest(IsoMessage request, string sessionId, TransactionContext txnContext)
+        private async Task<IsoMessage> HandleAuthorizationRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
             string? cardBIN = request.GetCardBIN();
 
@@ -663,7 +659,7 @@ public class TcpSwitchServer : IDisposable
             // DE#32 (Acquiring Institution ID): MUST be the Acquirer (e.g. 970400), NOT the Switch (970488)
             // DE#33 (Forwarding Institution ID): Equal to Switch ID (970488)
             
-            string currentDe32 = request.GetField(32);
+            string currentDe32 = request.GetField(32) ?? string.Empty;
             string switchId = issuerBank.IssuerCode; // 970488 for NAPAS TS
 
             // 1. Handle DE#32 (Acquirer ID)
@@ -706,9 +702,7 @@ public class TcpSwitchServer : IDisposable
             if (issuerBank.IsDefault && _tsConnection != null)
             {
                 Console.WriteLine($" [{sessionId}] Using persistent TS connection");
-                var responseTask = _tsConnection.ForwardTransactionAsync(request, sessionId);
-                responseTask.Wait(); // Block until complete (since this method is not async)
-                var tsResponse = responseTask.Result;
+                var tsResponse = await _tsConnection.ForwardTransactionAsync(request, sessionId);
                 
                 if (tsResponse != null)
                 {
@@ -736,7 +730,7 @@ public class TcpSwitchServer : IDisposable
         
         /// Handle 0400 - Reversal Request (Void/Cancel)
         
-        private IsoMessage HandleReversalRequest(IsoMessage request, string sessionId, TransactionContext txnContext)
+        private async Task<IsoMessage> HandleReversalRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
             Console.WriteLine($" [{sessionId}] Processing reversal request");
             
@@ -756,7 +750,7 @@ public class TcpSwitchServer : IDisposable
 
             Console.WriteLine($" [{sessionId}] Routing reversal to ISS: {issuerBank.IssuerName}");
 
-            string currentDe32 = request.GetField(32);
+            string currentDe32 = request.GetField(32) ?? string.Empty;
             string switchId = issuerBank.IssuerCode; 
 
             // 1. Handle DE#32 (Acquirer ID) for Reversal

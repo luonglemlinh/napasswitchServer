@@ -5,6 +5,7 @@ using core.Configuration;
 using core.Models;
 using core.Models.Configuration;
 using core.ISO8583;
+using core.Security;
 
 namespace router
 {
@@ -33,13 +34,22 @@ namespace router
         
         public IsoMessage ForwardToIssuer(IsoMessage request, IssuerBankConfig issuerBank, string sessionId)
         {
+            // Sync wrapper for backward compatibility
+            return ForwardToIssuerAsync(request, issuerBank, sessionId).GetAwaiter().GetResult();
+        }
+
+        public async Task<IsoMessage> ForwardToIssuerAsync(IsoMessage request, IssuerBankConfig issuerBank, string sessionId)
+        {
             try
             {
-                return _retryPolicy.Execute(
+                // We wrap the internal internal logic in the retry policy
+                // Note: If RetryPolicy support async, we should use it. 
+                // For now, keeping it simple or wrapping Task.Run if needed.
+                return await Task.Run(() => _retryPolicy.Execute(
                     () => ForwardToIssuerInternal(request, issuerBank, sessionId),
                     RetryPolicy.IsRetryableException,
                     $"ForwardToIssuer-{issuerBank.IssuerCode}"
-                );
+                ));
             }
             catch (SocketException ex)
             {
@@ -81,12 +91,23 @@ namespace router
 
                 // === DEBUG: Show raw bytes being sent to TS ===
                 Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === MESSAGE TO TS ===");
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Length Header (2 bytes): {BitConverter.ToString(lengthHeader)}");
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ISO Message ({requestBytes.Length} bytes):");
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] HEX: {BitConverter.ToString(requestBytes).Replace("-", " ")}");
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ISO Message ({requestBytes.Length} bytes)");
+                
+                string maskedPan = SecureDataHandler.MaskPAN(request.GetField(2));
+                string maskedTrack2 = MaskTrack2(request.GetField(35));
+                
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] DE2 (PAN): {maskedPan}");
+                if (request.HasField(35)) Console.WriteLine($"[{sessionId}] [ISS-DEBUG] DE35 (Track 2): {maskedTrack2}");
+
                 string asciiPreview = new string(requestBytes.Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ASCII: {asciiPreview}");
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === END MESSAGE ===");
+                // Simple masking for ASCII preview (replaces common PAN pattern)
+                if (!string.IsNullOrEmpty(request.GetField(2)))
+                {
+                    asciiPreview = asciiPreview.Replace(request.GetField(2)!, maskedPan);
+                }
+                
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ASCII Preview (Masked): {asciiPreview}");
+                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === END MESSAGE ===\n");
 
                 // Send to ISS
                 connection.Stream.Write(lengthHeader, 0, 2);
@@ -229,7 +250,8 @@ namespace router
                 IsoMessage response = _parser.Parse(responseBytes);
 
                 string rcDesc = ConfigurationLoader.Instance.GetResponseDescription(response.GetResponseCode() ?? "96");
-                Console.WriteLine($"[{sessionId}] [ISS-RESPONSE] RC: {response.GetResponseCode()} - {rcDesc}");
+                string respMaskedPan = SecureDataHandler.MaskPAN(response.GetField(2));
+                Console.WriteLine($"[{sessionId}] [ISS-RESPONSE] PAN: {respMaskedPan} | RC: {response.GetResponseCode()} - {rcDesc}");
 
                 return response;
             }
@@ -302,6 +324,16 @@ namespace router
 
             response.SetResponseCode(responseCode);
             return response;
+        }
+
+        private static string MaskTrack2(string? track2)
+        {
+            if (string.IsNullOrEmpty(track2)) return "";
+            int separatorIndex = track2.IndexOfAny(new[] { '=', 'D', 'd' });
+            if (separatorIndex < 0) return SecureDataHandler.MaskPAN(track2);
+            string pan = track2[..separatorIndex];
+            string tail = track2[separatorIndex..];
+            return $"{SecureDataHandler.MaskPAN(pan)}{tail[..1]}****";
         }
     }
 }

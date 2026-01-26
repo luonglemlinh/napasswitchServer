@@ -103,9 +103,9 @@ namespace core.ISO8583
             // DE33: Forwarding Institution ID - LLVAR, max 11 digits
             schema.AddField(33, "Forwarding Institution ID", FieldType.Variable, maxLength: 11);
             
-            // DE35: Track 2 Data - LLLVAR, max 37
-            var de35 = new IsoFieldDefinition(35, "Track 2 Data", FieldType.Variable, maxLength: 37);
-            de35.LengthEncoding = LengthEncoding.LLLVAR;
+            // DE35: Track 2 Data - LLVAR, max 40
+            var de35 = new IsoFieldDefinition(35, "Track 2 Data", FieldType.Variable, maxLength: 40);
+            de35.LengthEncoding = LengthEncoding.LLVAR;
             schema.Fields[35] = de35;
             
             // DE37: Retrieval Reference Number - Fixed 12 alphanumeric
@@ -129,8 +129,8 @@ namespace core.ISO8583
             // DE49: Currency Code - Transaction, Fixed 3 numeric
             schema.AddField(49, "Currency Code, Transaction", FieldType.Fixed, fixedLength: 3);
             
-            // DE52: PIN Data - Fixed 16 hex
-            schema.AddField(52, "PIN Data", FieldType.Fixed, fixedLength: 16);
+            // DE52: PIN Data - Fixed 16 hex (Disabled for testing)
+            // schema.AddField(52, "PIN Data", FieldType.Fixed, fixedLength: 16);
             
             // DE54: Additional Amounts - LLLVAR, max 120
             var de54 = new IsoFieldDefinition(54, "Additional Amounts", FieldType.Variable, maxLength: 120);

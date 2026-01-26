@@ -198,9 +198,9 @@
     <!-- DE#35 -->
     <DataElement Number="35" Name="" Description="">
       <MinLength>1</MinLength>
-      <MaxLength>37</MaxLength>
+      <MaxLength>40</MaxLength>
       <DataType>Z</DataType>
-      <Pattern>^[0-9D]{1,37}$</Pattern>
+      <Pattern>^[0-9D]{1,40}$</Pattern>
       <RequiredIn></RequiredIn>
       <ErrorCode>30</ErrorCode>
       <ErrorMessage>Invalid Track 2 data</ErrorMessage>

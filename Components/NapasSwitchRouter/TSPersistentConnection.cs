@@ -8,6 +8,7 @@ using core.Configuration;
 using core.Models;
 using core.Models.Configuration;
 using core.ISO8583;
+using core.Security;
 
 namespace router
 {
@@ -161,8 +162,9 @@ namespace router
         {
             try
             {
-                 Console.WriteLine($"[TS-RECV] HEX: {BitConverter.ToString(rawData).Replace("-", " ")}");
                  var msg = _parser.Parse(rawData);
+                 string maskedPan = SecureDataHandler.MaskPAN(msg.GetField(2));
+                 Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)}");
                  HandleParsedMessage(msg);
             }
             catch (Exception ex)
@@ -200,12 +202,6 @@ namespace router
 
         private bool IsResponseMTI(string mti)
         {
-            // Simple check: 2nd digit is even (0210, 0410, 0810)
-            return mti.Length == 4 && (mti[2] - '0') % 2 != 0; 
-            // Wait, Standard ISO: x2xx (Request), x3xx (Response)? No.
-            // 0200 Req -> 0210 Resp. 0220 -> 0230.
-            // Logic: Int(MTI) + 10 = Resp? 
-            // Better: Check 3rd char. 0=Req, 1=Resp. 2=Adv, 3=AdvResp. 
             // NAPAS: 0200/0210, 0400/0410, 0800/0810.
             // So if 3rd char is '1', it's a response.
             return mti.Length == 4 && mti[2] == '1';
@@ -322,10 +318,14 @@ namespace router
             if (!IsConnected) await ConnectAsync();
             
             // Log all fields being forwarded to TS for debugging
-            Console.WriteLine($"[{sessionId}] [TS-FWD] Forwarding to TS with fields:");
+            Console.WriteLine($"[{sessionId}] [TS-FWD] Forwarding to TS:");
             foreach (var field in request.Fields.OrderBy(f => f.Key))
             {
-                Console.WriteLine($"  DE{field.Key}: {field.Value}");
+                string val = field.Value;
+                if (field.Key == 2) val = SecureDataHandler.MaskPAN(val);
+                if (field.Key == 35) val = "MASKED"; // Simplified masking for TRN logs
+                
+                Console.WriteLine($"  DE{field.Key}: {val}");
             }
             
             try
@@ -384,7 +384,7 @@ namespace router
             if (!isResponse)
             {
                 Console.WriteLine($"[{sessionId}] [TS-SEND] Sending {message.MessageType} (STAN={message.Fields.GetValueOrDefault(11)})");
-                Console.WriteLine($"[{sessionId}] [TS-SEND] HEX: {BitConverter.ToString(fullMessage).Replace("-", " ")}");
+                // Note: full HEX dump removed for security; individual fields are logged in ForwardTransactionAsync
             }
 
             lock (_writeLock)
