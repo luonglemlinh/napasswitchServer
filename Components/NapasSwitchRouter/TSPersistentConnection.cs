@@ -164,7 +164,14 @@ namespace router
             {
                  var msg = _parser.Parse(rawData);
                  string maskedPan = SecureDataHandler.MaskPAN(msg.GetField(2));
-                 Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)}");
+                 string rc = msg.GetResponseCode();
+                 Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)} | RC: {rc}");
+                 
+                 if (rc == "30")
+                 {
+                     Console.WriteLine("[TS-ALERT] Format Error (RC 30) received from TS! This often means DE32 (Acquirer ID) or DE33 (Forwarding ID) is invalid for this routing.");
+                 }
+
                  HandleParsedMessage(msg);
             }
             catch (Exception ex)

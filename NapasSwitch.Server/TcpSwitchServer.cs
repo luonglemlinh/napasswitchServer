@@ -257,41 +257,41 @@ public class TcpSwitchServer : IDisposable
                 while (client.Connected && _isRunning)
                 {
                     // Step 1: Read message length header
-                    // Default: 2-byte big-endian length.
-                    // Some clients use 4-byte big-endian length; we attempt a safe fallback if the 2-byte value is invalid.
-                    byte[] lengthBytes = ReadExactOrNull(stream, 2);
+                    // Client team says header is 4 bytes ASCII (e.g., "0123")
+                    byte[] lengthBytes = ReadExactOrNull(stream, 4);
                     if (lengthBytes == null) break; // Client disconnected
 
-                    int messageLength = (lengthBytes[0] << 8) | lengthBytes[1];
-                    string lengthHex = BitConverter.ToString(lengthBytes);
+                    int messageLength;
+                    string lengthStr = System.Text.Encoding.ASCII.GetString(lengthBytes);
 
-                    const int maxPayloadLength = 65535;
-                    if (messageLength <= 0 || messageLength > maxPayloadLength)
+                    if (int.TryParse(lengthStr, out int asciiLen) && asciiLen > 0 && asciiLen < 65535)
                     {
-                        // Fallback: treat the first 2 bytes as the high-order bytes of a 4-byte big-endian length.
-                        byte[] remainingLenBytes = ReadExactOrNull(stream, 2);
-                        if (remainingLenBytes == null) break;
+                        messageLength = asciiLen;
+                        Console.WriteLine($"  [{sessionId}] Detected 4-byte ASCII length header: {lengthStr} (len={messageLength})");
+                    }
+                    else
+                    {
+                        // Fallback: try to interpret the 4 bytes as Big-Endian binary (some clients might still use this)
+                        int binLen4 = (lengthBytes[0] << 24) | (lengthBytes[1] << 16) | (lengthBytes[2] << 8) | lengthBytes[3];
+                        
+                        // Or try 2-byte binary (legacy) if the first 2 bytes were actually the length and we over-read
+                        int binLen2 = (lengthBytes[0] << 8) | lengthBytes[1];
 
-                        byte[] len4 = new byte[4]
+                        if (binLen4 > 0 && binLen4 < 65535)
                         {
-                            lengthBytes[0],
-                            lengthBytes[1],
-                            remainingLenBytes[0],
-                            remainingLenBytes[1]
-                        };
-
-                        int len32 = (len4[0] << 24) | (len4[1] << 16) | (len4[2] << 8) | len4[3];
-                        string len4Hex = BitConverter.ToString(len4);
-
-                        // If 4-byte length is still invalid, close the connection to avoid desync.
-                        if (len32 <= 0 || len32 > maxPayloadLength)
+                            messageLength = binLen4;
+                            Console.WriteLine($"  [{sessionId}] Detected 4-byte binary length header. len={messageLength}");
+                        }
+                        else if (binLen2 > 0 && binLen2 < 65535)
                         {
-                            Console.WriteLine($"  [{sessionId}] Invalid message length (2B={messageLength}, hex={lengthHex}; 4B={len32}, hex={len4Hex})");
+                            messageLength = binLen2;
+                            Console.WriteLine($"  [{sessionId}] Detected 2-byte binary length header (over-read 2 bytes). len={messageLength}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"  [{sessionId}] Invalid message length header: {BitConverter.ToString(lengthBytes)}");
                             break;
                         }
-
-                        messageLength = len32;
-                        Console.WriteLine($"  [{sessionId}] Detected 4-byte length header. len={messageLength}, hex={len4Hex}");
                     }
 
                     // Step 2: Read the actual ISO-8583 message
@@ -444,6 +444,12 @@ public class TcpSwitchServer : IDisposable
                 IsoMessage request;
                 try {
                     request = _parser.Parse(messageBytes);
+                    
+                    // TESTING: Print F00 Header
+                    if (!string.IsNullOrEmpty(request.Header))
+                    {
+                        Console.WriteLine($" [{sessionId}] F00: {request.Header}");
+                    }
                 } catch (Exception ex) {
                     Console.WriteLine($"[{sessionId}] Parse error: {ex.Message}");
                     var resp = CreateErrorResponse(new IsoMessage { MessageType = "0200" }, "30");

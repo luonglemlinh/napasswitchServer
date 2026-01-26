@@ -15,6 +15,22 @@ namespace core.Models
         /// Examples: "0200" (Purchase Request), "0210" (Purchase Response)
         
         public string MessageType { get; set; } = string.Empty;
+        
+        /// <summary>
+        /// F00: Message Header (Optional)
+        /// Examples: "NAPASBASE.ISO", TPDU "6000000000"
+        /// </summary>
+        public string Header { get; set; } = string.Empty;
+
+        /// <summary>
+        /// F01: Primary Bitmap (Hex string)
+        /// </summary>
+        public string PrimaryBitmap { get; set; } = string.Empty;
+
+        /// <summary>
+        /// Secondary Bitmap if present (Hex string)
+        /// </summary>
+        public string SecondaryBitmap { get; set; } = string.Empty;
 
         
         /// Data Elements - Field number (2-128) mapped to field value
@@ -134,7 +150,8 @@ namespace core.Models
                 ? $"{pan.Substring(0, 6)}****{pan.Substring(pan.Length - 4)}"
                 : "N/A";
 
-            return $"MTI: {MessageType} | PAN: {maskedPAN} | STAN: {GetSTAN()} | RC: {GetResponseCode()}";
+            string headerPart = string.IsNullOrEmpty(Header) ? "" : $"[{Header}] ";
+            return $"{headerPart}MTI: {MessageType} | PAN: {maskedPAN} | STAN: {GetSTAN()} | RC: {GetResponseCode()}";
         }
     }
 }

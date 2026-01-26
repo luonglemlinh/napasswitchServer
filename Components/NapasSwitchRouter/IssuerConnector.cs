@@ -190,53 +190,59 @@ namespace router
                     responseLength = responseBytes.Length;
                     Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Read {responseLength} bytes (no length header format)");
                 }
-                else if (len2Byte > 0 && len2Byte < 2000)
+                else 
                 {
-                    // Looks like 2-byte length header
-                    responseLength = len2Byte;
-                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected: 2-byte length header, length={responseLength}");
+                    // Detect and handle length header (4-byte ASCII, 4-byte binary, or 2-byte binary)
+                    int messageLength = 0;
+                    string lengthStr = System.Text.Encoding.ASCII.GetString(initialBytes);
                     
-                    responseBytes = new byte[responseLength];
-                    // Copy the 2 bytes after length header
-                    Array.Copy(initialBytes, 2, responseBytes, 0, Math.Min(initialRead - 2, responseLength));
-                    dataOffset = initialRead - 2;
-                    
-                    // Read remaining bytes
-                    if (dataOffset < responseLength)
+                    int binLen4 = (initialBytes[0] << 24) | (initialBytes[1] << 16) | (initialBytes[2] << 8) | initialBytes[3];
+                    int binLen2 = (initialBytes[0] << 8) | initialBytes[1];
+
+                    if (int.TryParse(lengthStr, out int asciiLen) && asciiLen > 0 && asciiLen < 65535)
                     {
-                        if (!TryReadExact(connection.Stream, responseBytes, dataOffset, responseLength - dataOffset))
-                        {
-                            Console.WriteLine($"[{sessionId}] [ISS-ERROR] Failed to read complete response");
-                            connection.MarkAsFailed();
-                            throw new System.IO.IOException("Failed to read complete response");
-                        }
+                        messageLength = asciiLen;
+                        Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected 4-byte ASCII length header: {lengthStr} (len={messageLength})");
                     }
-                }
-                else if (len4Byte > 0 && len4Byte < 2000)
-                {
-                    // Looks like 4-byte length header
-                    responseLength = len4Byte;
-                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected: 4-byte length header, length={responseLength}");
-                    
+                    else if (binLen4 > 0 && binLen4 < 65535)
+                    {
+                        messageLength = binLen4;
+                        Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected 4-byte binary length header. len={messageLength}");
+                    }
+                    else if (binLen2 > 0 && binLen2 < 65535)
+                    {
+                        messageLength = binLen2;
+                        Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected 2-byte binary length header. len={messageLength}");
+                    }
+                    else
+                    {
+                        Console.WriteLine($"[{sessionId}] [ISS-ERROR] Unknown response format or invalid length!");
+                        Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Raw header: {BitConverter.ToString(initialBytes, 0, initialRead)}");
+                        connection.MarkAsFailed();
+                        throw new System.IO.IOException($"Invalid message length header from TS");
+                    }
+
+                    responseLength = messageLength;
                     responseBytes = new byte[responseLength];
-                    if (!TryReadExact(connection.Stream, responseBytes, 0, responseLength))
+
+                    int bytesToCopyFromInitial = 0;
+                    if (messageLength == binLen2) // If 2-byte binary was the detected format
+                    {
+                        bytesToCopyFromInitial = Math.Min(initialRead - 2, responseLength);
+                        Array.Copy(initialBytes, 2, responseBytes, 0, bytesToCopyFromInitial);
+                    }
+                    else // 4-byte formats
+                    {
+                        // In Case of 4-byte header, the initial bytes were ALL length
+                        bytesToCopyFromInitial = 0; 
+                    }
+
+                    if (!TryReadExact(connection.Stream, responseBytes, bytesToCopyFromInitial, responseLength - bytesToCopyFromInitial))
                     {
                         Console.WriteLine($"[{sessionId}] [ISS-ERROR] Failed to read complete response");
                         connection.MarkAsFailed();
                         throw new System.IO.IOException("Failed to read complete response");
                     }
-                }
-                else
-                {
-                    // Unknown format - dump what we got
-                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Unknown response format!");
-                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] 2-byte interpret: {len2Byte}");
-                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] 4-byte interpret: {len4Byte}");
-                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Raw: {BitConverter.ToString(initialBytes, 0, initialRead)}");
-                    string asciiInitial = new string(initialBytes.Take(initialRead).Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
-                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ASCII: {asciiInitial}");
-                    connection.MarkAsFailed();
-                    throw new System.IO.IOException($"Unknown response format from TS");
                 }
 
                 Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Response HEX: {BitConverter.ToString(responseBytes).Replace("-", " ")}");
@@ -251,7 +257,13 @@ namespace router
 
                 string rcDesc = ConfigurationLoader.Instance.GetResponseDescription(response.GetResponseCode() ?? "96");
                 string respMaskedPan = SecureDataHandler.MaskPAN(response.GetField(2));
-                Console.WriteLine($"[{sessionId}] [ISS-RESPONSE] PAN: {respMaskedPan} | RC: {response.GetResponseCode()} - {rcDesc}");
+                string rc = response.GetResponseCode();
+                Console.WriteLine($"[{sessionId}] [ISS-RESPONSE] PAN: {respMaskedPan} | RC: {rc} - {rcDesc}");
+
+                if (rc == "30")
+                {
+                    Console.WriteLine($"[{sessionId}] [ISS-ALERT] Format Error (RC 30) received! Check DE32, DE33, or DE14 padding.");
+                }
 
                 return response;
             }
