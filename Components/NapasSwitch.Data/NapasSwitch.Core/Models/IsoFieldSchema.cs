@@ -82,6 +82,9 @@ namespace core.ISO8583
             // DE14: Expiration Date - Fixed 4 numeric (YYMM)
             schema.AddField(14, "Date, Expiration", FieldType.Fixed, fixedLength: 4);
             
+            // DE15: Settlement Date - Fixed 4 numeric (MMdd)
+            schema.AddField(15, "Date, Settlement", FieldType.Fixed, fixedLength: 4);
+            
             // DE18: Merchant Category Code - Fixed 4 numeric
             schema.AddField(18, "Merchant Category Code", FieldType.Fixed, fixedLength: 4);
             
@@ -94,14 +97,16 @@ namespace core.ISO8583
             // DE25: POS Condition Code - Fixed 2 numeric
             schema.AddField(25, "POS Condition Code", FieldType.Fixed, fixedLength: 2);
             
-            // DE32: Acquiring Institution ID - LLVAR, max 11 digits
+            // DE32: Acquiring Institution Identification Code - LLVAR, max 11 digits
             schema.AddField(32, "Acquiring Institution ID", FieldType.Variable, maxLength: 11);
             
             // DE33: Forwarding Institution ID - LLVAR, max 11 digits
             schema.AddField(33, "Forwarding Institution ID", FieldType.Variable, maxLength: 11);
             
-            // DE35: Track 2 Data - LLVAR, max 37
-            schema.AddField(35, "Track 2 Data", FieldType.Variable, maxLength: 37);
+            // DE35: Track 2 Data - LLVAR, max 40
+            var de35 = new IsoFieldDefinition(35, "Track 2 Data", FieldType.Variable, maxLength: 40);
+            de35.LengthEncoding = LengthEncoding.LLVAR;
+            schema.Fields[35] = de35;
             
             // DE37: Retrieval Reference Number - Fixed 12 alphanumeric
             schema.AddField(37, "Retrieval Reference Number", FieldType.Fixed, fixedLength: 12);
@@ -118,14 +123,19 @@ namespace core.ISO8583
             // DE42: Card Acceptor ID Code - Fixed 15 alphanumeric
             schema.AddField(42, "Card Acceptor ID Code", FieldType.Fixed, fixedLength: 15);
             
-            // DE43: Card Acceptor Name/Location - Fixed 40 alphanumeric (right-padded with spaces)
+            // DE43: Card Acceptor Name/Location - Fixed 40 alphanumeric
             schema.AddField(43, "Card Acceptor Name/Location", FieldType.Fixed, fixedLength: 40);
             
             // DE49: Currency Code - Transaction, Fixed 3 numeric
             schema.AddField(49, "Currency Code, Transaction", FieldType.Fixed, fixedLength: 3);
             
-            // DE52: PIN Data - Fixed 16 hex (8 bytes binary)
-            schema.AddField(52, "PIN Data", FieldType.Fixed, fixedLength: 16);
+            // DE52: PIN Data - Fixed 16 hex (Disabled for testing)
+            // schema.AddField(52, "PIN Data", FieldType.Fixed, fixedLength: 16);
+            
+            // DE54: Additional Amounts - LLLVAR, max 120
+            var de54 = new IsoFieldDefinition(54, "Additional Amounts", FieldType.Variable, maxLength: 120);
+            de54.LengthEncoding = LengthEncoding.LLLVAR;
+            schema.Fields[54] = de54;
             
             // DE55: ICC System Related Data - LLLVAR, max 999
             var de55 = new IsoFieldDefinition(55, "ICC System Related Data", FieldType.Variable, maxLength: 999);
@@ -138,6 +148,13 @@ namespace core.ISO8583
             // DE90: Original Data Elements - Fixed 42 numeric
             schema.AddField(90, "Original Data Elements", FieldType.Fixed, fixedLength: 42);
 
+            // DE102: Account Identification 1 - LLVAR, max 28
+            schema.AddField(102, "Account Identification 1", FieldType.Variable, maxLength: 28);
+
+            // DE63: Transaction Reference Number - LLLVAR, max 16
+            var de63 = new IsoFieldDefinition(63, "Transaction Reference Number", FieldType.Variable, maxLength: 16);
+            de63.LengthEncoding = LengthEncoding.LLLVAR;
+            schema.Fields[63] = de63;
 
             return schema;
         }

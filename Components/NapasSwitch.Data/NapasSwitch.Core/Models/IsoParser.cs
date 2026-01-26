@@ -168,7 +168,11 @@ public class IsoParser
 
             var fieldDef = _schema.GetField(fieldNum);
             if (fieldDef == null)
+            {
+                // Log fields present in bitmap but not in schema (like DE#118)
+                Console.WriteLine($"[PARSER-WARN] Field DE#{fieldNum} is present in bitmap but NOT defined in schema - SKIPPING");
                 continue; // Field not defined in schema
+            }
 
             string value = ExtractFieldValue(data, fieldDef, ref offset);
             fields[fieldNum] = value;
@@ -378,20 +382,34 @@ public class IsoParser
         return Encoding.ASCII.GetBytes(val);
     }
 
+    /// <summary>
+    /// Builds a variable-length field with LLVAR or LLLVAR encoding per NAPAS specification
+    /// LLVAR: 2-byte length prefix (zero-padded) + variable data
+    /// LLLVAR: 3-byte length prefix (zero-padded) + variable data
+    /// 
+    /// Example for DE#32 with LLVAR:
+    ///   Input: "970400" (6 chars)
+    ///   Length: 6 → "06" (2 bytes, zero-padded)
+    ///   Output: "06970400" (8 bytes total)
+    /// </summary>
     private IEnumerable<byte> BuildVariableField(LengthEncoding encoding, string value)
     {
         var val = value ?? string.Empty;
         int length = val.Length;
+        
+        // Format length as zero-padded ASCII digits per NAPAS spec
+        // D2 = 2 digits with leading zeros (e.g., 6 → "06")
+        // D3 = 3 digits with leading zeros (e.g., 123 → "123")
         string prefix = encoding switch
         {
-            LengthEncoding.LLVAR => length.ToString("D2"),
-            LengthEncoding.LLLVAR => length.ToString("D3"),
+            LengthEncoding.LLVAR => length.ToString("D2"),   // 2 bytes: "06", "11", etc.
+            LengthEncoding.LLLVAR => length.ToString("D3"),  // 3 bytes: "006", "123", etc.
             _ => throw new InvalidOperationException($"Unknown encoding: {encoding}")
         };
 
         var bytes = new List<byte>();
-        bytes.AddRange(Encoding.ASCII.GetBytes(prefix));
-        bytes.AddRange(Encoding.ASCII.GetBytes(val));
+        bytes.AddRange(Encoding.ASCII.GetBytes(prefix));  // Add length prefix
+        bytes.AddRange(Encoding.ASCII.GetBytes(val));     // Add actual data
         return bytes;
     }
 }

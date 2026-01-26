@@ -198,9 +198,9 @@
     <!-- DE#35 -->
     <DataElement Number="35" Name="" Description="">
       <MinLength>1</MinLength>
-      <MaxLength>37</MaxLength>
+      <MaxLength>40</MaxLength>
       <DataType>Z</DataType>
-      <Pattern>^[0-9D]{1,37}$</Pattern>
+      <Pattern>^[0-9D]{1,40}$</Pattern>
       <RequiredIn></RequiredIn>
       <ErrorCode>30</ErrorCode>
       <ErrorMessage>Invalid Track 2 data</ErrorMessage>
@@ -395,14 +395,14 @@
     </DataElement>
 
     <!-- DE#63 -->
-    <DataElement Number="63" Name="" Description="">
+    <DataElement Number="63" Name="DE63_TransactionReferenceNumber" Description="Transaction reference number (TRN)">
       <MinLength>1</MinLength>
       <MaxLength>16</MaxLength>
       <DataType>ANS</DataType>
       <Pattern></Pattern>
       <RequiredIn></RequiredIn>
       <ErrorCode>30</ErrorCode>
-      <ErrorMessage>Invalid transaction reference number</ErrorMessage>
+      <ErrorMessage>Invalid transaction reference number - max 16 characters</ErrorMessage>
     </DataElement>
 
     <!-- DE#70 -->

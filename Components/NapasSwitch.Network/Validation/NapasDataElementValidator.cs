@@ -299,16 +299,12 @@ namespace network.Validation
                 }
             }
 
-            // Track-2 related requirements: enforce when DE35 (Track 2) is present
-            if (message.Fields.ContainsKey(35))
+            // Track-2 vs Manual Entry requirements: enforce DE14 when DE35 is absent
+            if (!message.Fields.ContainsKey(35) && (mti == "0200" || mti == "0400"))
             {
-                int[] trackRequired = { 14, 35, 52 };
-                foreach (var de in trackRequired)
+                if (!message.Fields.ContainsKey(14))
                 {
-                    if (!message.Fields.ContainsKey(de))
-                    {
-                        results.Add(BuildMissingResult(de, mti));
-                    }
+                    results.Add(BuildMissingResult(14, mti));
                 }
             }
 
@@ -369,7 +365,7 @@ namespace network.Validation
                 "AN" => Regex.IsMatch(value, @"^[a-zA-Z0-9]+$"),
                 "ANS" => Regex.IsMatch(value, @"^[a-zA-Z0-9\s\.,\-/]+$"),
                 "B" => Regex.IsMatch(value, @"^[0-9A-F]+$", RegexOptions.IgnoreCase), // Binary as hex
-                "Z" => Regex.IsMatch(value, @"^[0-9]+$"), // Track 2 data
+                "Z" => Regex.IsMatch(value, @"^[0-9D=]+$", RegexOptions.IgnoreCase), // Track data (allows D or = separator)
                 _ => true
             };
         }

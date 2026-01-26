@@ -58,6 +58,7 @@ namespace router
         public int RetryCount { get; set; }
         public string? ErrorCode { get; set; }
         public string? ErrorMessage { get; set; }
+        public string? TRN { get; set; }
 
         private readonly object _lock = new object();
 
@@ -302,7 +303,7 @@ namespace router
             };
 
             // Copy fields from original request
-            foreach (var field in new[] { 2, 3, 4, 7, 11, 12, 13, 32, 33, 37, 41, 42, 49 })
+            foreach (var field in new[] { 2, 3, 4, 7, 11, 12, 13, 32, 33, 37, 41, 42, 49, 63 })
             {
                 if (context.Request.HasField(field))
                     reversal.SetField(field, context.Request.GetField(field));
