@@ -308,6 +308,8 @@ public class TcpSwitchServer : IDisposable
 
                     byte[] isoPayload = messageBytes;
 
+                    // TPDU detection disabled per user request
+                    /*
                     // Try: assume 5-byte TPDU header (common ISO8583 framing)
                     if (messageLength > 5)
                     {
@@ -325,6 +327,7 @@ public class TcpSwitchServer : IDisposable
                             Console.WriteLine($" [{sessionId}] First 20 bytes of ISO: {BitConverter.ToString(isoPayload, 0, Math.Min(20, isoPayload.Length))}");
                         }
                     }
+                    */
 
                     // Step 3: Process the message and get response
                     byte[]? responseBytes = await ProcessMessageAsync(isoPayload, sessionId);
