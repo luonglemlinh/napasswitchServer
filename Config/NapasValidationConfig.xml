@@ -47,7 +47,7 @@
       <MaxLength>10</MaxLength>
       <DataType>N</DataType>
       <Pattern>^(0[1-9]|1[0-2])(0[1-9]|[12][0-9]|3[01])(0[0-9]|1[0-9]|2[0-3])[0-5][0-9][0-5][0-9]$</Pattern>
-      <RequiredIn></RequiredIn>
+      <RequiredIn>0200,0210,0400,0410,0800,0810</RequiredIn>
       <ErrorCode>30</ErrorCode>
       <ErrorMessage>Invalid transmission date/time - format MMddHHmmss</ErrorMessage>
     </DataElement>
@@ -113,7 +113,7 @@
       <MaxLength>4</MaxLength>
       <DataType>N</DataType>
       <Pattern>^[0-9]{4}$</Pattern>
-      <RequiredIn></RequiredIn>
+      <RequiredIn>0200,0210,0400,0410</RequiredIn>
       <ErrorCode>54</ErrorCode>
       <ErrorMessage>Invalid expiration date - must be YYMM</ErrorMessage>
     </DataElement>
@@ -135,7 +135,7 @@
       <MaxLength>4</MaxLength>
       <DataType>N</DataType>
       <Pattern>^[0-9]{4}$</Pattern>
-      <RequiredIn></RequiredIn>
+      <RequiredIn>0200,0210</RequiredIn>
       <ErrorCode>30</ErrorCode>
       <ErrorMessage>Invalid merchant type - must be 4 digits MCC</ErrorMessage>
     </DataElement>
@@ -157,7 +157,7 @@
       <MaxLength>3</MaxLength>
       <DataType>N</DataType>
       <Pattern>^[0-9]{3}$</Pattern>
-      <RequiredIn></RequiredIn>
+      <RequiredIn>0200,0210</RequiredIn>
       <ErrorCode>30</ErrorCode>
       <ErrorMessage>Invalid POS entry mode - must be 3 numeric digits</ErrorMessage>
     </DataElement>
@@ -179,7 +179,7 @@
       <MaxLength>2</MaxLength>
       <DataType>N</DataType>
       <Pattern>^(00|01|03|05|08|10|51)$</Pattern>
-      <RequiredIn></RequiredIn>
+      <RequiredIn>0200,0210</RequiredIn>
       <ErrorCode>30</ErrorCode>
       <ErrorMessage>Invalid POS condition code - allowed values: 00, 01, 03, 05, 08, 10, 51</ErrorMessage>
     </DataElement>
@@ -198,12 +198,12 @@
     <!-- DE#35 -->
     <DataElement Number="35" Name="" Description="">
       <MinLength>1</MinLength>
-      <MaxLength>40</MaxLength>
+      <MaxLength>37</MaxLength>
       <DataType>Z</DataType>
-      <Pattern>^[0-9D]{1,40}$</Pattern>
+      <Pattern>^([0-9]{1,19})D([0-9]{4}|D)([0-9]{3}|D)([0-9D]{0,10})$</Pattern>
       <RequiredIn></RequiredIn>
       <ErrorCode>30</ErrorCode>
-      <ErrorMessage>Invalid Track 2 data</ErrorMessage>
+      <ErrorMessage>Invalid Track 2 structure - must follow ISO 7813/Wiki format [PAN]D[ED]D[SC][DD]</ErrorMessage>
     </DataElement>
 
     <!-- DE#36 -->
@@ -310,7 +310,7 @@
       <MaxLength>3</MaxLength>
       <DataType>N</DataType>
       <Pattern>^[0-9]{3}$</Pattern>
-      <RequiredIn></RequiredIn>
+      <RequiredIn>0200,0210</RequiredIn>
       <ErrorCode>30</ErrorCode>
       <ErrorMessage>Invalid currency code - must be 3 numeric digits</ErrorMessage>
       <AllowedValues>

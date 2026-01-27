@@ -164,7 +164,14 @@ namespace router
             {
                  var msg = _parser.Parse(rawData);
                  string maskedPan = SecureDataHandler.MaskPAN(msg.GetField(2));
-                 Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)}");
+                 string rc = msg.GetResponseCode();
+                 Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)} | RC: {rc}");
+                 
+                 if (rc == "30")
+                 {
+                     Console.WriteLine("[TS-ALERT] Format Error (RC 30) received from TS! This often means DE32 (Acquirer ID) or DE33 (Forwarding ID) is invalid for this routing.");
+                 }
+
                  HandleParsedMessage(msg);
             }
             catch (Exception ex)
@@ -296,16 +303,18 @@ namespace router
             // - Contains Acquirer's ID number (typically 6-digit BIN code)
             // - Encoded as: [2-byte length][variable data]
             // - Length field: Zero-padded ASCII (e.g., "06" for 6 digits)
-            // Example: Acquirer ID "970400" → Wire format "06970400"
-            //          where "06" indicates 6 digits follow, then "970400" is the actual ID
+            // Example: Acquirer ID "970418" → Wire format "06970418"
+            //          where "06" indicates 6 digits follow, then "970418" is the actual ID
             string acquirerId = _tsConfig.IssuerCode ?? "970488";
             
             // Validate acquirer ID format (should be 6-11 numeric digits per NAPAS)
             if (string.IsNullOrEmpty(acquirerId) || acquirerId.Length < 6 || acquirerId.Length > 11)
             {
                 Console.WriteLine($"[TS-WARN] Invalid Acquirer ID '{acquirerId}', using default '970488'");
-                acquirerId = "970400";
+                acquirerId = "970418";
             }
+
+            if (acquirerId == "970400") acquirerId = "970418";
             
             message.SetField(32, acquirerId);
 
@@ -323,7 +332,7 @@ namespace router
             {
                 string val = field.Value;
                 if (field.Key == 2) val = SecureDataHandler.MaskPAN(val);
-                if (field.Key == 35) val = "MASKED"; // Simplified masking for TRN logs
+                // UNMASKED DE35 for testing per user request
                 
                 Console.WriteLine($"  DE{field.Key}: {val}");
             }

@@ -39,22 +39,51 @@ public class IsoParser
             throw new ArgumentException("Invalid ISO message: too short");
 
         int offset = 0;
+        string header = "";
 
-        // 1. Extract Message Type (4 characters = 2 bytes in BCD)
+        // Detect Header (F00)
+        // Improvise: Scan for the 4-digit MTI pattern. Anything before it is Header.
+        // MTIs usually start with '0' (0200, 0400, 0800, etc.)
+        for (int i = 0; i <= Math.Min(messageBytes.Length - 4, 32); i++)
+        {
+            if (char.IsDigit((char)messageBytes[i]) && 
+                char.IsDigit((char)messageBytes[i+1]) &&
+                char.IsDigit((char)messageBytes[i+2]) &&
+                char.IsDigit((char)messageBytes[i+3]))
+            {
+                // Found potential MTI at index i
+                if (i > 0)
+                {
+                    header = Encoding.ASCII.GetString(messageBytes, 0, i);
+                    offset = i;
+                }
+                break;
+            }
+        }
+
+        // 1. Extract Message Type (4 characters)
         string messageType = ExtractMessageType(messageBytes, ref offset);
 
         // 2. Parse Bitmap (8 bytes primary, optionally 8 bytes secondary)
-        bool[] bitmap = ParseBitmap(messageBytes, ref offset);
+        var bitmapInfo = ParseBitmap(messageBytes, ref offset);
 
-        // 3. Extract fields based on bitmap
-        var fields = ExtractFields(messageBytes, bitmap, ref offset);
+        var fields = ExtractFields(messageBytes, bitmapInfo.Bitmap, ref offset);
+
+        // Add F00 and F01 to dictionary for completeness
+        if (!string.IsNullOrEmpty(header)) fields[0] = header;
+        fields[1] = bitmapInfo.PrimaryHex;
 
         return new IsoMessage
         {
             MessageType = messageType,
+            Header = header,
+            PrimaryBitmap = bitmapInfo.PrimaryHex,
+            SecondaryBitmap = bitmapInfo.SecondaryHex,
             Fields = fields
         };
     }
+
+    private record BitmapParseResult(bool[] Bitmap, string PrimaryHex, string SecondaryHex);
 
     private string ExtractMessageType(byte[] data, ref int offset)
     {
@@ -68,28 +97,27 @@ public class IsoParser
     /// Parse bitmap - supports both BINARY (8 bytes) and HEX (16 ASCII chars) formats
     /// If bit 1 is set, secondary bitmap follows (additional 8 bytes/16 chars for fields 65-128)
     
-    private bool[] ParseBitmap(byte[] data, ref int offset)
+    private BitmapParseResult ParseBitmap(byte[] data, ref int offset)
     {
         var bitmap = new bool[128]; // Support up to 128 fields
+        string primaryHex = "";
+        string secondaryHex = "";
 
         // Detect if bitmap is in HEX format (16 ASCII hex characters) or BINARY format (8 bytes)
-        // HEX format: characters are 0-9, A-F, a-f
         bool isHexFormat = IsHexBitmap(data, offset);
-
         byte[] primaryBitmap;
         
         if (isHexFormat)
         {
-            // HEX format: 16 ASCII characters representing 8 bytes
-            string hexStr = Encoding.ASCII.GetString(data, offset, 16);
-            primaryBitmap = HexStringToBytes(hexStr);
+            primaryHex = Encoding.ASCII.GetString(data, offset, 16);
+            primaryBitmap = HexStringToBytes(primaryHex);
             offset += 16;
         }
         else
         {
-            // BINARY format: 8 raw bytes
             primaryBitmap = new byte[8];
             Array.Copy(data, offset, primaryBitmap, 0, 8);
+            primaryHex = BitConverter.ToString(primaryBitmap).Replace("-", "");
             offset += 8;
         }
 
@@ -108,14 +136,15 @@ public class IsoParser
             
             if (isHexFormat)
             {
-                string hexStr = Encoding.ASCII.GetString(data, offset, 16);
-                secondaryBitmap = HexStringToBytes(hexStr);
+                secondaryHex = Encoding.ASCII.GetString(data, offset, 16);
+                secondaryBitmap = HexStringToBytes(secondaryHex);
                 offset += 16;
             }
             else
             {
                 secondaryBitmap = new byte[8];
                 Array.Copy(data, offset, secondaryBitmap, 0, 8);
+                secondaryHex = BitConverter.ToString(secondaryBitmap).Replace("-", "");
                 offset += 8;
             }
 
@@ -127,7 +156,7 @@ public class IsoParser
             }
         }
 
-        return bitmap;
+        return new BitmapParseResult(bitmap, primaryHex, secondaryHex);
     }
 
     /// <summary>
@@ -388,9 +417,9 @@ public class IsoParser
     /// LLLVAR: 3-byte length prefix (zero-padded) + variable data
     /// 
     /// Example for DE#32 with LLVAR:
-    ///   Input: "970400" (6 chars)
+    ///   Input: "970418" (6 chars)
     ///   Length: 6 → "06" (2 bytes, zero-padded)
-    ///   Output: "06970400" (8 bytes total)
+    ///   Output: "06970418" (8 bytes total)
     /// </summary>
     private IEnumerable<byte> BuildVariableField(LengthEncoding encoding, string value)
     {

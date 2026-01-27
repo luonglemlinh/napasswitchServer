@@ -257,41 +257,41 @@ public class TcpSwitchServer : IDisposable
                 while (client.Connected && _isRunning)
                 {
                     // Step 1: Read message length header
-                    // Default: 2-byte big-endian length.
-                    // Some clients use 4-byte big-endian length; we attempt a safe fallback if the 2-byte value is invalid.
-                    byte[] lengthBytes = ReadExactOrNull(stream, 2);
+                    // Client team says header is 4 bytes ASCII (e.g., "0123")
+                    byte[] lengthBytes = ReadExactOrNull(stream, 4);
                     if (lengthBytes == null) break; // Client disconnected
 
-                    int messageLength = (lengthBytes[0] << 8) | lengthBytes[1];
-                    string lengthHex = BitConverter.ToString(lengthBytes);
+                    int messageLength;
+                    string lengthStr = System.Text.Encoding.ASCII.GetString(lengthBytes);
 
-                    const int maxPayloadLength = 65535;
-                    if (messageLength <= 0 || messageLength > maxPayloadLength)
+                    if (int.TryParse(lengthStr, out int asciiLen) && asciiLen > 0 && asciiLen < 65535)
                     {
-                        // Fallback: treat the first 2 bytes as the high-order bytes of a 4-byte big-endian length.
-                        byte[] remainingLenBytes = ReadExactOrNull(stream, 2);
-                        if (remainingLenBytes == null) break;
+                        messageLength = asciiLen;
+                        Console.WriteLine($"  [{sessionId}] Detected 4-byte ASCII length header: {lengthStr} (len={messageLength})");
+                    }
+                    else
+                    {
+                        // Fallback: try to interpret the 4 bytes as Big-Endian binary (some clients might still use this)
+                        int binLen4 = (lengthBytes[0] << 24) | (lengthBytes[1] << 16) | (lengthBytes[2] << 8) | lengthBytes[3];
+                        
+                        // Or try 2-byte binary (legacy) if the first 2 bytes were actually the length and we over-read
+                        int binLen2 = (lengthBytes[0] << 8) | lengthBytes[1];
 
-                        byte[] len4 = new byte[4]
+                        if (binLen4 > 0 && binLen4 < 65535)
                         {
-                            lengthBytes[0],
-                            lengthBytes[1],
-                            remainingLenBytes[0],
-                            remainingLenBytes[1]
-                        };
-
-                        int len32 = (len4[0] << 24) | (len4[1] << 16) | (len4[2] << 8) | len4[3];
-                        string len4Hex = BitConverter.ToString(len4);
-
-                        // If 4-byte length is still invalid, close the connection to avoid desync.
-                        if (len32 <= 0 || len32 > maxPayloadLength)
+                            messageLength = binLen4;
+                            Console.WriteLine($"  [{sessionId}] Detected 4-byte binary length header. len={messageLength}");
+                        }
+                        else if (binLen2 > 0 && binLen2 < 65535)
                         {
-                            Console.WriteLine($"  [{sessionId}] Invalid message length (2B={messageLength}, hex={lengthHex}; 4B={len32}, hex={len4Hex})");
+                            messageLength = binLen2;
+                            Console.WriteLine($"  [{sessionId}] Detected 2-byte binary length header (over-read 2 bytes). len={messageLength}");
+                        }
+                        else
+                        {
+                            Console.WriteLine($"  [{sessionId}] Invalid message length header: {BitConverter.ToString(lengthBytes)}");
                             break;
                         }
-
-                        messageLength = len32;
-                        Console.WriteLine($"  [{sessionId}] Detected 4-byte length header. len={messageLength}, hex={len4Hex}");
                     }
 
                     // Step 2: Read the actual ISO-8583 message
@@ -308,6 +308,8 @@ public class TcpSwitchServer : IDisposable
 
                     byte[] isoPayload = messageBytes;
 
+                    // TPDU detection disabled per user request
+                    /*
                     // Try: assume 5-byte TPDU header (common ISO8583 framing)
                     if (messageLength > 5)
                     {
@@ -325,6 +327,7 @@ public class TcpSwitchServer : IDisposable
                             Console.WriteLine($" [{sessionId}] First 20 bytes of ISO: {BitConverter.ToString(isoPayload, 0, Math.Min(20, isoPayload.Length))}");
                         }
                     }
+                    */
 
                     // Step 3: Process the message and get response
                     byte[]? responseBytes = await ProcessMessageAsync(isoPayload, sessionId);
@@ -332,16 +335,15 @@ public class TcpSwitchServer : IDisposable
                     // Step 4: Send response back to client
                     if (responseBytes != null && responseBytes.Length > 0)
                     {
-                        // Write length header
-                        byte[] responseLengthBytes = new byte[2];
-                        responseLengthBytes[0] = (byte)(responseBytes.Length >> 8);
-                        responseLengthBytes[1] = (byte)(responseBytes.Length & 0xFF);
-
-                        stream.Write(responseLengthBytes, 0, 2);
+                        // Write length header (4-byte ASCII per NAPAS specification)
+                        string respLengthStr = responseBytes.Length.ToString("D4");
+                        byte[] lengthHeader = System.Text.Encoding.ASCII.GetBytes(respLengthStr);
+ 
+                        stream.Write(lengthHeader, 0, 4);
                         stream.Write(responseBytes, 0, responseBytes.Length);
                         stream.Flush();
-
-                        Console.WriteLine($" [{sessionId}] Sent {responseBytes.Length} bytes response\n");
+ 
+                        Console.WriteLine($" [{sessionId}] Sent {responseBytes.Length} bytes response (Length Header: {respLengthStr})\n");
                     }
 
                     // Update session stats
@@ -444,6 +446,36 @@ public class TcpSwitchServer : IDisposable
                 IsoMessage request;
                 try {
                     request = _parser.Parse(messageBytes);
+                    
+                    // Normalize Track 2 (DE#35) for WAY4 compliance (Max 37, separator 'D', no 'F' padding, strip sentinels)
+                    if (request.HasField(35))
+                    {
+                        string track2 = request.GetField(35)!;
+                        
+                        // 1. Strip sentinels if present (';', '?', and others per ISO 7813)
+                        track2 = track2.Trim(';', '?', ' ');
+
+                        // 2. Strip 'F' padding characters (often found in chip data)
+                        track2 = track2.Replace("F", "").Replace("f", "");
+
+                        // 3. Normalize all separators ('=' -> 'D')
+                        // Per ISO-8583 DE35, 'D' (0x44) is the field separator
+                        track2 = track2.Replace('=', 'D');
+
+                        // 4. Truncate to 37 characters if it's too long (WAY4 limit)
+                        if (track2.Length > 37)
+                        {
+                             track2 = track2.Substring(0, 37);
+                        }
+                        
+                        request.SetField(35, track2);
+                    }
+
+                    // TESTING: Print F00 Header
+                    if (!string.IsNullOrEmpty(request.Header))
+                    {
+                        Console.WriteLine($" [{sessionId}] F00: {request.Header}");
+                    }
                 } catch (Exception ex) {
                     Console.WriteLine($"[{sessionId}] Parse error: {ex.Message}");
                     var resp = CreateErrorResponse(new IsoMessage { MessageType = "0200" }, "30");
@@ -494,33 +526,36 @@ public class TcpSwitchServer : IDisposable
                 
                 Console.WriteLine($" [{sessionId}] Validation PASSED");
                 Console.WriteLine($" [{sessionId}] Message Details:");
-                Console.WriteLine($"   MTI: {request.MessageType}");
-                Console.WriteLine($"   DE2 (PAN): {SecureDataHandler.MaskPAN(request.GetField(2))}");
-                Console.WriteLine($"   DE3 (Proc Code): {request.GetField(3)}");
-                Console.WriteLine($"   DE4 (Amount): {request.GetField(4)}");
-                Console.WriteLine($"   DE7 (Trans Date): {request.GetField(7)}");
-                Console.WriteLine($"   DE11 (STAN): {request.GetField(11)}");
-                Console.WriteLine($"   DE12 (Local Time): {request.GetField(12)}");
-                Console.WriteLine($"   DE13 (Local Date): {request.GetField(13)}");
-                Console.WriteLine($"   DE14 (Exp Date): {request.GetField(14)}");
-                Console.WriteLine($"   DE22 (POS Mode): {request.GetField(22)}");
-                Console.WriteLine($"   DE25 (POS Cond): {request.GetField(25)}");
+                if (request.HasField(0))
+                {
+                    Console.WriteLine($"   000: {request.GetField(0)}");
+                }
+                Console.WriteLine($"   Type: {request.MessageType}");
+                Console.WriteLine($"   002: {SecureDataHandler.MaskPAN(request.GetField(2))}");
+                Console.WriteLine($"   003: {request.GetField(3)}");
+                Console.WriteLine($"   004: {request.GetField(4)}");
+                Console.WriteLine($"   007: {request.GetField(7)}");
+                Console.WriteLine($"   011: {request.GetField(11)}");
+                Console.WriteLine($"   012: {request.GetField(12)}");
+                Console.WriteLine($"   013: {request.GetField(13)}");
+                Console.WriteLine($"   014: {request.GetField(14)}");
+                Console.WriteLine($"   022: {request.GetField(22)}");
+                Console.WriteLine($"   025: {request.GetField(25)}");
                 
                 // DE32: Show actual value and explain LLVAR encoding
                 string? de32Value = request.GetField(32);
                 if (!string.IsNullOrEmpty(de32Value))
                 {
-                    // Note: The raw wire format would be: [2-byte length][actual value]
-                    // E.g., "970400" on wire = "06970400" where "06" is the length prefix
-                    Console.WriteLine($"   DE32 (Acq ID): {de32Value} (LLVAR encoded as: {de32Value.Length:D2}{de32Value})");
+                    Console.WriteLine($"   032: {de32Value} (LLVAR encoded as: {de32Value.Length:D2}{de32Value})");
                 }
                 
-                Console.WriteLine($"   DE33 (Fwd ID): {request.GetField(33)}");
-                Console.WriteLine($"   DE37 (RRN): {request.GetField(37)}");
-                Console.WriteLine($"   DE41 (Term ID): {request.GetField(41)}");
-                Console.WriteLine($"   DE42 (Merch ID): {request.GetField(42)}");
-                Console.WriteLine($"   DE49 (Curr Code): {request.GetField(49)}");
-                Console.WriteLine($"   DE63 (TRN): {request.GetTRN()}");
+                Console.WriteLine($"   033: {request.GetField(33)}");
+                Console.WriteLine($"   035: {request.GetField(35)}");
+                Console.WriteLine($"   037: {request.GetField(37)}");
+                Console.WriteLine($"   041: {request.GetField(41)}");
+                Console.WriteLine($"   042: {request.GetField(42)}");
+                Console.WriteLine($"   049: {request.GetField(49)}");
+                Console.WriteLine($"   063: {request.GetTRN()}");
 
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = null;
@@ -654,28 +689,26 @@ public class TcpSwitchServer : IDisposable
             }
 
             Console.WriteLine($" [{sessionId}] Routing to ISS: {issuerBank.IssuerName} ({issuerBank.IssuerCode})");
-
+ 
             // NAPAS Routing Logic:
-            // DE#32 (Acquiring Institution ID): MUST be the Acquirer (e.g. 970400), NOT the Switch (970488)
+            // DE#32 (Acquiring Institution ID): MUST be the Acquirer (e.g. 970418), NOT the Switch (970488)
             // DE#33 (Forwarding Institution ID): Equal to Switch ID (970488)
             
-            string currentDe32 = request.GetField(32) ?? string.Empty;
             string switchId = issuerBank.IssuerCode; // 970488 for NAPAS TS
-
+            string defaultAcquirer = "970418"; // BIDV
+ 
             // 1. Handle DE#32 (Acquirer ID)
+            string currentDe32 = request.GetField(32) ?? string.Empty;
             if (string.IsNullOrEmpty(currentDe32))
             {
-                // Missing? Set default 970400
-                request.SetField(32, "970400");
-                Console.WriteLine($" [{sessionId}] DE#32 missing, setting default: 970400");
+                request.SetField(32, defaultAcquirer);
+                Console.WriteLine($" [{sessionId}] DE#32 missing, setting default: {defaultAcquirer}");
             }
             else if (currentDe32 == switchId && issuerBank.IsDefault)
             {
                 // CRITICAL FIX: If DE#32 equals Switch ID (970488), it's logically wrong for TS routing.
-                // The Switch cannot be the Acquirer for the TS.
-                // Force it back to default Acquirer ID (970400).
-                request.SetField(32, "970400");
-                Console.WriteLine($" [{sessionId}] DE#32 was {currentDe32} (Switch ID), forced to 970400 (Acquirer ID) to prevent RC:30");
+                request.SetField(32, defaultAcquirer);
+                Console.WriteLine($" [{sessionId}] DE#32 was {currentDe32} (Switch ID), forced to {defaultAcquirer} (Acquirer ID) to prevent RC:30");
             }
             else
             {

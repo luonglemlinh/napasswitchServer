@@ -1,4 +1,4 @@
-using System;
+    using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -156,6 +156,41 @@ namespace network.Validation
                 result.AddDataElementResult(deResult);
             }
 
+            // 3. Custom cross-field validation for DE#35 (Track 2) vs DE#22 (POS Entry Mode)
+            if (message.HasField(35) && message.HasField(22))
+            {
+                string posMode = message.GetField(22)!;
+                string track2 = message.GetField(35)!;
+                
+                // Chip transactions: 05, 07, 91 (per Napas spec prefixes)
+                bool isChip = posMode.StartsWith("05") || posMode.StartsWith("07") || posMode.StartsWith("91");
+                
+                if (isChip)
+                {
+                    // Match based on ISO 7813 structure: [PAN]D[ED]D[SC][DD]
+                    var match = Regex.Match(track2, @"^([0-9]{1,19})D([0-9]{4}|D)([0-9]{3}|D)([0-9D]{0,10})$");
+                    if (match.Success)
+                    {
+                        string scGroup = match.Groups[3].Value;
+                        if (!string.IsNullOrEmpty(scGroup) && scGroup != "D")
+                        {
+                            char scFirst = scGroup[0];
+                            if (scFirst != '2' && scFirst != '6')
+                            {
+                                result.AddDataElementResult(new DataElementValidationResult
+                                {
+                                    DataElementNumber = 35,
+                                    DataElementName = "Track-2 Data",
+                                    IsValid = false,
+                                    ErrorCode = "30",
+                                    ErrorMessage = $"Service Code first digit '{scFirst}' is invalid for chip transaction (must be 2 or 6)"
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+
             if (!result.IsValid)
             {
                 result.OverallErrorCode = result.GetFirstErrorCode();
@@ -284,31 +319,7 @@ namespace network.Validation
             var results = new List<DataElementValidationResult>();
             var mti = message.MessageType;
 
-            // Base required fields for financial transactions (0200/0400)
-            // Only enforce truly essential fields - let config handle the rest
-            if (mti == "0200" || mti == "0400")
-            {
-                // These are essential for routing and processing
-                int[] baseRequired = { 2, 3, 4, 11 }; // PAN, ProcessingCode, Amount, STAN
-                foreach (var de in baseRequired)
-                {
-                    if (!message.Fields.ContainsKey(de))
-                    {
-                        results.Add(BuildMissingResult(de, mti));
-                    }
-                }
-            }
-
-            // Track-2 vs Manual Entry requirements: enforce DE14 when DE35 is absent
-            if (!message.Fields.ContainsKey(35) && (mti == "0200" || mti == "0400"))
-            {
-                if (!message.Fields.ContainsKey(14))
-                {
-                    results.Add(BuildMissingResult(14, mti));
-                }
-            }
-
-            // Existing configuration-based RequiredIn rules
+            // Dynamic validation based on XML configuration (RequiredIn tags)
             foreach (var kvp in _dataElementDefinitions)
             {
                 var definition = kvp.Value;
