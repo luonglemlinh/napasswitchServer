@@ -153,5 +153,107 @@ namespace core.Models
             string headerPart = string.IsNullOrEmpty(Header) ? "" : $"[{Header}] ";
             return $"{headerPart}MTI: {MessageType} | PAN: {maskedPAN} | STAN: {GetSTAN()} | RC: {GetResponseCode()}";
         }
+
+        public static string GetFieldDescription(int fieldNumber)
+        {
+            return fieldNumber switch
+            {
+                2 => "PAN",
+                3 => "Processing Code",
+                4 => "Amount",
+                7 => "Transmission Date/Time",
+                11 => "STAN",
+                12 => "Local Time",
+                13 => "Local Date",
+                14 => "Expiration Date",
+                18 => "Merchant Type",
+                19 => "Acquire Country",
+                22 => "POS Entry Mode",
+                25 => "POS Condition Code",
+                32 => "Acquirer ID",
+                33 => "Forwarding ID",
+                35 => "Track 2",
+                37 => "RRN",
+                38 => "Auth ID",
+                39 => "Response Code",
+                41 => "Terminal ID",
+                42 => "Merchant ID",
+                43 => "Merchant Name/Loc",
+                49 => "Currency Code",
+                52 => "PIN Block",
+                54 => "Additional Amounts",
+                63 => "TRN",
+                70 => "Network Info Code",
+                90 => "Original Data Elements",
+                100 => "Receiving ID",
+                102 => "Account ID 1",
+                103 => "Account ID 2",
+                _ => $"DE{fieldNumber}"
+            };
+        }
+
+        public void LogImportantFields(string sessionId, string prefix = "TS-RESPONSE")
+        {
+            Console.WriteLine($"\n [{sessionId}] === {prefix} IMPORTANT FIELDS ===");
+            Console.WriteLine($"   MTI: {MessageType}");
+            
+            int[] importantFields = { 2, 3, 4, 7, 11, 12, 13, 32, 33, 37, 38, 39, 41, 42, 63 };
+            
+            foreach (int field in importantFields)
+            {
+                if (HasField(field))
+                {
+                    string value = GetField(field)!;
+                    
+                    // Mask sensitive data
+                    if (field == 2) 
+                    {
+                        value = value.Length >= 10 
+                            ? $"{value.Substring(0, 6)}****{value.Substring(value.Length - 4)}" 
+                            : "******";
+                    }
+                    else if (field == 35)
+                    {
+                        // Mask Track 2 if logged elsewhere but here we keep it safe
+                        value = "[MASKED]";
+                    }
+                    
+                    Console.WriteLine($"   {field:D3} ({GetFieldDescription(field)}): {value}");
+                }
+            }
+            Console.WriteLine($" [{sessionId}] =====================================\n");
+        }
+        public void LogAllFields(string sessionId, string prefix = "ISO-DEBUG")
+        {
+            Console.WriteLine($"\n [{sessionId}] === {prefix} FULL MESSAGE DUMP ===");
+            Console.WriteLine($"   MTI: {MessageType}");
+            if (!string.IsNullOrEmpty(Header)) Console.WriteLine($"   Header: {Header}");
+            
+            foreach (var field in Fields.OrderBy(f => f.Key))
+            {
+                int fieldNum = field.Key;
+                string value = field.Value;
+                string label = GetFieldDescription(fieldNum);
+                
+                // DE1 (Bitmap) special handling to show both halves
+                if (fieldNum == 1)
+                {
+                    string fullBitmap = PrimaryBitmap;
+                    if (!string.IsNullOrEmpty(SecondaryBitmap)) fullBitmap += SecondaryBitmap;
+                    value = fullBitmap;
+                }
+                
+                // Masking rule for testing
+                if (fieldNum == 2) 
+                    value = value.Length >= 10 ? $"{value.Substring(0, 6)}****{value.Substring(value.Length - 4)}" : "******";
+                else if (fieldNum == 35 || fieldNum == 36)
+                    value = "[TRACK DATA MASKED]";
+                else if (fieldNum == 52)
+                    value = "[PIN BLOCK MASKED]";
+                
+                Console.WriteLine($"   {fieldNum:D3} ({label}): {value}");
+            }
+            Console.WriteLine($" [{sessionId}] =====================================\n");
+        }
     }
 }

@@ -89,25 +89,8 @@ namespace router
                 lengthHeader[0] = (byte)(requestBytes.Length >> 8);
                 lengthHeader[1] = (byte)(requestBytes.Length & 0xFF);
 
-                // === DEBUG: Show raw bytes being sent to TS ===
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === MESSAGE TO TS ===");
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ISO Message ({requestBytes.Length} bytes)");
-                
-                string maskedPan = SecureDataHandler.MaskPAN(request.GetField(2));
-                string maskedTrack2 = MaskTrack2(request.GetField(35));
-                
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] DE2 (PAN): {maskedPan}");
-                if (request.HasField(35)) Console.WriteLine($"[{sessionId}] [ISS-DEBUG] DE35 (Track 2): {maskedTrack2}");
-
-                string asciiPreview = new string(requestBytes.Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
-                // Simple masking for ASCII preview (replaces common PAN pattern)
-                if (!string.IsNullOrEmpty(request.GetField(2)))
-                {
-                    asciiPreview = asciiPreview.Replace(request.GetField(2)!, maskedPan);
-                }
-                
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] ASCII Preview (Masked): {asciiPreview}");
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === END MESSAGE ===\n");
+                // Full message dump for debugging (Switch to ISS)
+                request.LogAllFields(sessionId, "ISS-FORWARD");
 
                 // Send to ISS
                 connection.Stream.Write(lengthHeader, 0, 2);
@@ -258,7 +241,8 @@ namespace router
                 string rcDesc = ConfigurationLoader.Instance.GetResponseDescription(response.GetResponseCode() ?? "96");
                 string respMaskedPan = SecureDataHandler.MaskPAN(response.GetField(2));
                 string rc = response.GetResponseCode();
-                Console.WriteLine($"[{sessionId}] [ISS-RESPONSE] PAN: {respMaskedPan} | RC: {rc} - {rcDesc}");
+                // Full message dump for debugging (ISS to Switch)
+                response.LogAllFields(sessionId, "ISS-RECV");
 
                 if (rc == "30")
                 {

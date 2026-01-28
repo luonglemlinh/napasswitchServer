@@ -165,9 +165,12 @@ namespace router
                  var msg = _parser.Parse(rawData);
                  string maskedPan = SecureDataHandler.MaskPAN(msg.GetField(2));
                  string rc = msg.GetResponseCode();
-                 Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)} | RC: {rc}");
-                 
-                 if (rc == "30")
+                  Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)} | RC: {rc}");
+                  
+                  // Full message dump for debugging (TS to Switch)
+                  msg.LogAllFields("TS-PERSISTENT", "TS-RECV");
+
+                  if (rc == "30")
                  {
                      Console.WriteLine("[TS-ALERT] Format Error (RC 30) received from TS! This often means DE32 (Acquirer ID) or DE33 (Forwarding ID) is invalid for this routing.");
                  }
@@ -326,16 +329,8 @@ namespace router
         {
             if (!IsConnected) await ConnectAsync();
             
-            // Log all fields being forwarded to TS for debugging
-            Console.WriteLine($"[{sessionId}] [TS-FWD] Forwarding to TS:");
-            foreach (var field in request.Fields.OrderBy(f => f.Key))
-            {
-                string val = field.Value;
-                if (field.Key == 2) val = SecureDataHandler.MaskPAN(val);
-                // UNMASKED DE35 for testing per user request
-                
-                Console.WriteLine($"  DE{field.Key}: {val}");
-            }
+            // Full message dump for debugging (Switch to TS)
+            request.LogAllFields(sessionId, "TS-FORWARD");
             
             try
             {
