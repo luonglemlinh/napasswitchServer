@@ -63,6 +63,10 @@ namespace router
 
                 _client = new TcpClient();
                 await _client.ConnectAsync(_tsConfig.Host, _tsConfig.Port);
+                
+                // Configure TCP Keep-Alive (Windows specific)
+                ConfigureTcpKeepAlive(_client.Client);
+                
                 _stream = _client.GetStream();
                 
                 // Note: Don't set ReadTimeout for infinite listener loop
@@ -82,7 +86,7 @@ namespace router
                 if (signOnSuccess)
                 {
                     // Start heartbeat timer
-                    StartHeartbeat();
+                    // StartHeartbeat(); // DISABLED: Using TCP Keep-Alive instead
                     Console.WriteLine($"[TS-CONN] Successfully connected and signed on to {_tsConfig.IssuerName}");
                     return true;
                 }
@@ -165,9 +169,16 @@ namespace router
                  var msg = _parser.Parse(rawData);
                  string maskedPan = SecureDataHandler.MaskPAN(msg.GetField(2));
                  string rc = msg.GetResponseCode();
-                 Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)} | RC: {rc}");
-                 
-                 if (rc == "30")
+                  Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)} | RC: {rc}");
+                  
+                  // Full message dump for debugging (TS to Switch)
+                  // Skip dump for Heartbeat/Network messages (08xx) to avoid log spam
+                  if (!msg.MessageType.StartsWith("08"))
+                  {
+                      msg.LogAllFields("TS-PERSISTENT", "TS-RECV");
+                  }
+
+                  if (rc == "30")
                  {
                      Console.WriteLine("[TS-ALERT] Format Error (RC 30) received from TS! This often means DE32 (Acquirer ID) or DE33 (Forwarding ID) is invalid for this routing.");
                  }
@@ -190,8 +201,8 @@ namespace router
             if (mti == "0800")
             {
                 // Incoming Echo Request -> Send 0810 Response
-                Console.WriteLine($"[TS-RECV] Handling Check/Heartbeat Request from TS");
-                _ = SendEchoResponseAsync(msg);
+                Console.WriteLine($"[TS-RECV] Handling Check/Heartbeat Request from TS (DISABLED FOR TESTING)");
+                // _ = SendEchoResponseAsync(msg);
             }
             else if (IsResponseMTI(mti))
             {
@@ -326,16 +337,8 @@ namespace router
         {
             if (!IsConnected) await ConnectAsync();
             
-            // Log all fields being forwarded to TS for debugging
-            Console.WriteLine($"[{sessionId}] [TS-FWD] Forwarding to TS:");
-            foreach (var field in request.Fields.OrderBy(f => f.Key))
-            {
-                string val = field.Value;
-                if (field.Key == 2) val = SecureDataHandler.MaskPAN(val);
-                // UNMASKED DE35 for testing per user request
-                
-                Console.WriteLine($"  DE{field.Key}: {val}");
-            }
+            // Full message dump for debugging (Switch to TS)
+            request.LogAllFields(sessionId, "TS-FORWARD");
             
             try
             {
@@ -441,6 +444,35 @@ namespace router
             _disposed = true;
             _heartbeatTimer?.Dispose();
             Disconnect();
+        }
+        private void ConfigureTcpKeepAlive(Socket socket)
+        {
+            try
+            {
+                // TCP Keep-Alive settings for Windows
+                // Structure: [on/off (4 bytes)][keepalivetime (4 bytes)][keepaliveinterval (4 bytes)]
+                // Time/Interval are in milliseconds
+                
+                uint dummy = 0;
+                byte[] inOptionValues = new byte[12];
+                
+                // On/Off: 1 (Enabled)
+                BitConverter.GetBytes((uint)1).CopyTo(inOptionValues, 0);
+                
+                // KeepAliveTime: 60,000 ms (60 seconds) - Time before first keep-alive packet
+                BitConverter.GetBytes((uint)60000).CopyTo(inOptionValues, 4);
+                
+                // KeepAliveInterval: 1,000 ms (1 second) - Interval between retries
+                BitConverter.GetBytes((uint)1000).CopyTo(inOptionValues, 8);
+
+                socket.IOControl(IOControlCode.KeepAliveValues, inOptionValues, null);
+                
+                Console.WriteLine("[TS-CONN] TCP Keep-Alive configured: Idle=60s, Interval=1s");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TS-WARN] Failed to configure TCP Keep-Alive: {ex.Message}");
+            }
         }
     }
 }

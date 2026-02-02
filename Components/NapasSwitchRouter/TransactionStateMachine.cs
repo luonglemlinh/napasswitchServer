@@ -121,14 +121,23 @@ namespace router
                 (TransactionState.Validated, TransactionState.RoutingFailed) => true,
                 (TransactionState.RoutingToIssuer, TransactionState.AwaitingResponse) => true,
                 (TransactionState.RoutingToIssuer, TransactionState.RoutingFailed) => true,
+                (TransactionState.RoutingToIssuer, TransactionState.ResponseReceived) => true, // Allowed for fast async response
+                (TransactionState.RoutingToIssuer, TransactionState.Completed) => true,        // Allowed for direct completion
                 (TransactionState.AwaitingResponse, TransactionState.ResponseReceived) => true,
                 (TransactionState.AwaitingResponse, TransactionState.Timeout) => true,
                 (TransactionState.ResponseReceived, TransactionState.Completed) => true,
                 
+                // Direct Reversal (e.g. 0420)
+                (TransactionState.Validated, TransactionState.ReversalPending) => true,
+                // Early completion (blocking validation filters, etc)
+                (TransactionState.Validated, TransactionState.Completed) => true,
+
                 // Error flows
                 (TransactionState.RoutingToIssuer, TransactionState.Timeout) => true,
                 (TransactionState.RoutingToIssuer, TransactionState.SystemError) => true,
+                (TransactionState.RoutingToIssuer, TransactionState.ValidationFailed) => true, // Allowed if response fails validation
                 (TransactionState.AwaitingResponse, TransactionState.SystemError) => true,
+                (TransactionState.ResponseReceived, TransactionState.SystemError) => true,     // Allowed if processing response fails
                 
                 // Reversal flows
                 (TransactionState.Timeout, TransactionState.ReversalRequired) => true,

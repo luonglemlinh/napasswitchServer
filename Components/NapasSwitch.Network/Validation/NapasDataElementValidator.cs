@@ -312,12 +312,25 @@ namespace network.Validation
 
         
         
-        /// Check Requireddata elements based on MTI
-        
+        /// Check Required data elements based on MTI
         private List<DataElementValidationResult> CheckRequiredDataElements(IsoMessage message)
         {
             var results = new List<DataElementValidationResult>();
             var mti = message.MessageType;
+
+            // SPECIAL CASE: If this is an error response (RC != 00), relax mandatory field requirements.
+            // Many TS/ISS implementations omit mandatory fields when signaling a format or processing error.
+            if (mti.EndsWith("10") || mti.EndsWith("30"))
+            {
+                string? rc = message.GetResponseCode();
+                if (!string.IsNullOrEmpty(rc) && rc != "00")
+                {
+                    // For error responses, only validate fields that are actually present.
+                    // Do not flag missing fields.
+                    Console.WriteLine($"[VALIDATOR] Relaxed validation applied for response with RC {rc}. Mandatory field checks skipped.");
+                    return results; 
+                }
+            }
 
             // Dynamic validation based on XML configuration (RequiredIn tags)
             foreach (var kvp in _dataElementDefinitions)
@@ -333,7 +346,7 @@ namespace network.Validation
                             DataElementName = definition.Name,
                             IsValid = false,
                             ErrorCode = definition.ErrorCode,
-                            ErrorMessage = $"RequiredDE{definition.Number} ({definition.Name}) is missing for MTI {mti}"
+                            ErrorMessage = $"Required DE{definition.Number} ({definition.Name}) is missing for MTI {mti}"
                         });
                     }
                 }
