@@ -127,6 +127,11 @@ namespace router
                 (TransactionState.AwaitingResponse, TransactionState.Timeout) => true,
                 (TransactionState.ResponseReceived, TransactionState.Completed) => true,
                 
+                // Direct Reversal (e.g. 0420)
+                (TransactionState.Validated, TransactionState.ReversalPending) => true,
+                // Early completion (blocking validation filters, etc)
+                (TransactionState.Validated, TransactionState.Completed) => true,
+
                 // Error flows
                 (TransactionState.RoutingToIssuer, TransactionState.Timeout) => true,
                 (TransactionState.RoutingToIssuer, TransactionState.SystemError) => true,

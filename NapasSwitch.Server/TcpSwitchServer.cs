@@ -597,7 +597,7 @@ public class TcpSwitchServer : IDisposable
                 {
                     "0200" => await HandleAuthorizationRequestAsync(request, sessionId, txnContext),
                     "0400" => await HandleReversalRequestAsync(request, sessionId, txnContext),
-                    "0800" => HandleNetworkManagement(request, sessionId),
+                    "0420" => await HandleReversalRequestAsync(request, sessionId, txnContext),
                     _ => CreateErrorResponse(request, "12")
                 };
 
@@ -833,34 +833,17 @@ public class TcpSwitchServer : IDisposable
         }
 
         
-        /// Handle 0800 - Network Management (heartbeat, sign-on)
-        
-        private IsoMessage HandleNetworkManagement(IsoMessage request, string sessionId)
-        {
-            Console.WriteLine($" [{sessionId}] Network management message");
+        // Network Management (0800) support removed per request
 
-            var response = new IsoMessage
-            {
-                MessageType = "0810" // Network response
-            };
-
-            // Echo back key fields
-            if (request.HasField(7)) response.SetField(7, request.GetField(7));
-            if (request.HasField(11)) response.SetField(11, request.GetField(11));
-            if (request.HasField(70)) response.SetField(70, request.GetField(70));
-
-            response.SetResponseCode("00");
-            return response;
-        }
 
         
-        /// Create a successful response (0210 or 0410)
+        /// Create a successful response (Dynamic MTI)
         
         private IsoMessage CreateSuccessResponse(IsoMessage request, bool isReversal = false)
         {
             var response = new IsoMessage
             {
-                MessageType = isReversal ? "0410" : "0210"
+                MessageType = GetResponseMTI(request.MessageType)
             };
 
             // Copy key fields from request
@@ -875,14 +858,13 @@ public class TcpSwitchServer : IDisposable
         }
 
         
-        /// Create an error response with specific response code
+        /// Create an error response with specific response code AND dynamic MTI
         
         private IsoMessage CreateErrorResponse(IsoMessage request, string responseCode)
         {
             var response = new IsoMessage
             {
-                MessageType = request.MessageType == "0200" ? "0210" :
-                              request.MessageType == "0400" ? "0410" : "0210"
+                MessageType = GetResponseMTI(request.MessageType)
             };
 
             // Copy key fields
@@ -894,6 +876,16 @@ public class TcpSwitchServer : IDisposable
 
             response.SetResponseCode(responseCode);
             return response;
+        }
+
+        private string GetResponseMTI(string requestMti)
+        {
+            // Simple logic: Request MTI + 10 (e.g. 0200->0210, 0420->0430)
+            if (int.TryParse(requestMti, out int mtiVal))
+            {
+                return (mtiVal + 10).ToString("D4");
+            }
+            return "0210"; // Fallback
         }
 
         
