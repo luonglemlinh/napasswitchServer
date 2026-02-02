@@ -113,7 +113,7 @@
       <MaxLength>4</MaxLength>
       <DataType>N</DataType>
       <Pattern>^[0-9]{4}$</Pattern>
-      <RequiredIn>0200,0210,0400,0410</RequiredIn>
+      <RequiredIn>0200,0400,0410</RequiredIn>
       <ErrorCode>54</ErrorCode>
       <ErrorMessage>Invalid expiration date - must be YYMM</ErrorMessage>
     </DataElement>
@@ -157,7 +157,7 @@
       <MaxLength>3</MaxLength>
       <DataType>N</DataType>
       <Pattern>^[0-9]{3}$</Pattern>
-      <RequiredIn>0200,0210</RequiredIn>
+      <RequiredIn>0200</RequiredIn>
       <ErrorCode>30</ErrorCode>
       <ErrorMessage>Invalid POS entry mode - must be 3 numeric digits</ErrorMessage>
     </DataElement>
@@ -179,7 +179,7 @@
       <MaxLength>2</MaxLength>
       <DataType>N</DataType>
       <Pattern>^(00|01|03|05|08|10|51)$</Pattern>
-      <RequiredIn>0200,0210</RequiredIn>
+      <RequiredIn>0200</RequiredIn>
       <ErrorCode>30</ErrorCode>
       <ErrorMessage>Invalid POS condition code - allowed values: 00, 01, 03, 05, 08, 10, 51</ErrorMessage>
     </DataElement>
