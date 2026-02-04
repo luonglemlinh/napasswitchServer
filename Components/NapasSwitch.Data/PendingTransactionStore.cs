@@ -32,12 +32,12 @@ namespace data
                     TransactionId, SessionId, MessageType,
                     RequestPAN, RequestAmount, RequestProcessingCode, RequestSTAN,
                     RequestDateTime, RequestAcquirerID, RequestTerminalID, RequestMerchantID,
-                    RequestRRN, RequestMessageBytes, Status, ExpiresAt
+                    RequestRRN, RequestTRN, RequestMessageBytes, Status, ExpiresAt
                 ) VALUES (
                     @TransactionId, @SessionId, @MessageType,
                     @PAN, @Amount, @ProcessingCode, @STAN,
                     @DateTime, @AcquirerID, @TerminalID, @MerchantID,
-                    @RRN, @MessageBytes, 'PENDING', @ExpiresAt
+                    @RRN, @TRN, @MessageBytes, 'PENDING', @ExpiresAt
                 )", connection);
 
             command.Parameters.AddWithValue("@TransactionId", transactionId);
@@ -57,6 +57,7 @@ namespace data
             command.Parameters.AddWithValue("@TerminalID", request.GetField(41) ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@MerchantID", request.GetField(42) ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@RRN", request.GetField(37) ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@TRN", request.GetTRN() ?? (object)DBNull.Value);
             command.Parameters.AddWithValue("@MessageBytes", messageBytes);
             command.Parameters.AddWithValue("@ExpiresAt", GetVietnamTime().AddMinutes(_expirationMinutes));
 
@@ -143,6 +144,52 @@ namespace data
                     RequestMessageBytes = (byte[])reader[12],
                     Status = reader.GetString(13),
                     CreatedAt = reader.GetDateTime(14)
+                };
+            }
+
+            return null;
+        }
+
+        /// <summary>
+        /// Get pending transaction by TRN (Transaction Reference Number) for reversal verification
+        /// </summary>
+        public async Task<PendingTransaction?> GetRequestByTRNAsync(string trn)
+        {
+            using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            var command = new SqlCommand(@"
+                SELECT TransactionId, SessionId, MessageType, 
+                       RequestPAN, RequestAmount, RequestProcessingCode, RequestSTAN,
+                       RequestDateTime, RequestAcquirerID, RequestTerminalID, RequestMerchantID,
+                       RequestRRN, RequestTRN, RequestMessageBytes, Status, CreatedAt
+                FROM PendingTransactions 
+                WHERE RequestTRN = @TRN AND Status = 'PENDING'
+                ORDER BY CreatedAt DESC", connection);
+
+            command.Parameters.AddWithValue("@TRN", trn);
+
+            using var reader = await command.ExecuteReaderAsync();
+            if (await reader.ReadAsync())
+            {
+                return new PendingTransaction
+                {
+                    TransactionId = reader.GetString(0),
+                    SessionId = reader.GetString(1),
+                    MessageType = reader.GetString(2),
+                    RequestPAN = reader.IsDBNull(3) ? null : reader.GetString(3),
+                    RequestAmount = reader.GetDecimal(4),
+                    RequestProcessingCode = reader.IsDBNull(5) ? null : reader.GetString(5),
+                    RequestSTAN = reader.IsDBNull(6) ? null : reader.GetString(6),
+                    RequestDateTime = reader.IsDBNull(7) ? null : reader.GetString(7),
+                    RequestAcquirerID = reader.IsDBNull(8) ? null : reader.GetString(8),
+                    RequestTerminalID = reader.IsDBNull(9) ? null : reader.GetString(9),
+                    RequestMerchantID = reader.IsDBNull(10) ? null : reader.GetString(10),
+                    RequestRRN = reader.IsDBNull(11) ? null : reader.GetString(11),
+                    RequestTRN = reader.IsDBNull(12) ? null : reader.GetString(12),
+                    RequestMessageBytes = (byte[])reader[13],
+                    Status = reader.GetString(14),
+                    CreatedAt = reader.GetDateTime(15)
                 };
             }
 
@@ -237,6 +284,7 @@ namespace data
         public string? RequestTerminalID { get; set; }
         public string? RequestMerchantID { get; set; }
         public string? RequestRRN { get; set; }
+        public string? RequestTRN { get; set; }
         public byte[] RequestMessageBytes { get; set; } = Array.Empty<byte>();
         public string Status { get; set; } = "PENDING";
         public DateTime CreatedAt { get; set; }

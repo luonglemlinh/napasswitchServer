@@ -156,6 +156,11 @@ namespace network.Validation
                 result.AddDataElementResult(deResult);
             }
 
+            foreach (var deResult in ValidateBalanceInquiryRules(message))
+            {
+                result.AddDataElementResult(deResult);
+            }
+
             // 3. Custom cross-field validation for DE#35 (Track 2) vs DE#22 (POS Entry Mode)
             if (message.HasField(35) && message.HasField(22))
             {
@@ -198,6 +203,75 @@ namespace network.Validation
             }
 
             return result;
+        }
+
+        private IEnumerable<DataElementValidationResult> ValidateBalanceInquiryRules(IsoMessage message)
+        {
+            var results = new List<DataElementValidationResult>();
+            var processingCode = message.GetField(3);
+            if (string.IsNullOrEmpty(processingCode))
+            {
+                return results;
+            }
+
+            var amount = message.GetField(4) ?? string.Empty;
+            var isBalanceInquiry = processingCode.StartsWith("30", StringComparison.Ordinal);
+            var isPurchase = processingCode.StartsWith("00", StringComparison.Ordinal);
+
+            if (isBalanceInquiry)
+            {
+                if (!IsBalanceInquiryMti(message.MessageType))
+                {
+                    results.Add(new DataElementValidationResult
+                    {
+                        DataElementNumber = 0,
+                        DataElementName = "MTI",
+                        IsValid = false,
+                        ErrorCode = "30",
+                        ErrorMessage = $"Balance inquiry processing code requires MTI 0100/0110/0200/0210 (actual: {message.MessageType})"
+                    });
+                }
+
+                if (!string.IsNullOrEmpty(amount) && !IsZeroAmount(amount))
+                {
+                    results.Add(BuildAmountRuleResult("Balance inquiry must use zero amount"));
+                }
+            }
+            else if (isPurchase)
+            {
+                if (!string.IsNullOrEmpty(amount) && IsZeroAmount(amount))
+                {
+                    results.Add(BuildAmountRuleResult("Purchase must use a non-zero amount"));
+                }
+            }
+
+            return results;
+        }
+
+        private static bool IsZeroAmount(string amount)
+        {
+            return amount.All(c => c == '0');
+        }
+
+        private static bool IsBalanceInquiryMti(string mti)
+        {
+            return mti == "0100" || mti == "0110" || mti == "0200" || mti == "0210";
+        }
+
+        private DataElementValidationResult BuildAmountRuleResult(string errorMessage)
+        {
+            var errorCode = _dataElementDefinitions.TryGetValue(4, out var definition)
+                ? definition.ErrorCode
+                : "13";
+
+            return new DataElementValidationResult
+            {
+                DataElementNumber = 4,
+                DataElementName = "DE4_Amount",
+                IsValid = false,
+                ErrorCode = errorCode,
+                ErrorMessage = errorMessage
+            };
         }
 
         

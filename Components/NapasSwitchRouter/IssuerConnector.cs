@@ -6,6 +6,7 @@ using core.Models;
 using core.Models.Configuration;
 using core.ISO8583;
 using core.Security;
+using core.Helpers;
 
 namespace router
 {
@@ -79,8 +80,6 @@ namespace router
                 // Step 1: Get connection from pool
                 connection = _connectionPool.GetConnection(issuerBank);
 
-                Console.WriteLine($"[{sessionId}] [ISS-CONNECT] Connection established");
-
                 // Step 2: Build and send the ISO-8583 message
                 byte[] requestBytes = _parser.Build(request);
 
@@ -89,15 +88,14 @@ namespace router
                 lengthHeader[0] = (byte)(requestBytes.Length >> 8);
                 lengthHeader[1] = (byte)(requestBytes.Length & 0xFF);
 
-                // Full message dump for debugging (Switch to ISS)
-                request.LogAllFields(sessionId, "ISS-FORWARD");
-
+                // Log request before forwarding to ISS
+                MessageLogger.LogMessage(sessionId, "ISS-FORWARD", request);
                 // Send to ISS
                 connection.Stream.Write(lengthHeader, 0, 2);
                 connection.Stream.Write(requestBytes, 0, requestBytes.Length);
                 connection.Stream.Flush();
 
-                Console.WriteLine($"[{sessionId}] [ISS-SEND] Sent {requestBytes.Length} bytes to ISS");
+                Console.WriteLine($"[{sessionId}] [ISS-SEND] {request.MessageType} | TRN: {request.GetTRN() ?? "N/A"}");
 
                 // Step 3: Receive response from ISS
                 // First, try to read initial bytes to detect the format
@@ -126,8 +124,8 @@ namespace router
                     throw new System.IO.IOException("TS closed connection without response");
                 }
 
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === RESPONSE FROM TS ===");
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Initial {initialRead} bytes: {BitConverter.ToString(initialBytes, 0, initialRead)}");
+                // Technical debug logs moved to file/removed for console clarity
+                // Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Initial {initialRead} bytes: {BitConverter.ToString(initialBytes, 0, initialRead)}");
                 
                 int responseLength;
                 byte[] responseBytes;
@@ -228,21 +226,20 @@ namespace router
                     }
                 }
 
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Response HEX: {BitConverter.ToString(responseBytes).Replace("-", " ")}");
-                string asciiResponse = new string(responseBytes.Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Response ASCII: {asciiResponse}");
-                Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === END RESPONSE ===");
-
-                Console.WriteLine($"[{sessionId}] [ISS-RECV] Received {responseBytes.Length} bytes from ISS");
-
+                // Binary/ASCII dumps moved to file/removed for console clarity
+                // Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Response HEX: {BitConverter.ToString(responseBytes).Replace("-", " ")}");
+                // string asciiResponse = new string(responseBytes.Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
+                // Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Response ASCII: {asciiResponse}");
+                // Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === END RESPONSE ===");
                 // Step 4: Parse the response
                 IsoMessage response = _parser.Parse(responseBytes);
+                string rc = response.GetResponseCode() ?? "96";
 
-                string rcDesc = ConfigurationLoader.Instance.GetResponseDescription(response.GetResponseCode() ?? "96");
-                string respMaskedPan = SecureDataHandler.MaskPAN(response.GetField(2));
-                string rc = response.GetResponseCode();
-                // Full message dump for debugging (ISS to Switch)
-                response.LogAllFields(sessionId, "ISS-RECV");
+                // Log response received from ISS
+                MessageLogger.LogMessage(sessionId, "ISS-RECV", response);
+                string respRc = response.GetResponseCode() ?? "00";
+                string respTrn = response.GetTRN() ?? request.GetTRN() ?? "N/A";
+                Console.WriteLine($"[{sessionId}] [ISS-RECV] {response.MessageType} | TRN: {respTrn} | RC: {respRc}");
 
                 if (rc == "30")
                 {
