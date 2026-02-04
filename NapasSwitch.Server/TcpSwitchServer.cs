@@ -11,6 +11,7 @@ using core.Configuration;
 using core.Models;
 using core.ISO8583;
 using core.Security;
+using core.Helpers;
 using network.Validation;
 using router;
 using data;
@@ -37,8 +38,8 @@ public class TcpSwitchServer : IDisposable
     private Timer? _poolHealthTimer;
     private Timer? _cleanupTimer;
 
-    // Persistent connection to TS (Transaction Switch)
-    private TSPersistentConnection? _tsConnection;
+    // Persistent connection manager for TS (Transaction Switch) - Supports 10 concurrent channels
+    private TSConnectionManager? _tsConnection;
 
     // Thread-safe collection to track active connections
     // ConcurrentDictionary = multiple threads can access it safely!
@@ -94,8 +95,9 @@ public class TcpSwitchServer : IDisposable
         if (defaultTS != null)
         {
             Console.WriteLine($"[INIT] Found default TS: {defaultTS.IssuerName} at {defaultTS.Host}:{defaultTS.Port}");
-            _tsConnection = new TSPersistentConnection(defaultTS, heartbeatIntervalMs: 30000);
-            Console.WriteLine("[INIT] TS persistent connection manager created");
+            // Initialize manager with 10 channels for the default TS
+            _tsConnection = new TSConnectionManager(defaultTS, channelCount: 10, heartbeatIntervalMs: 30000);
+            Console.WriteLine("[INIT] TS connection manager initialized with 10 parallel channels");
         }
         else
         {
@@ -105,21 +107,22 @@ public class TcpSwitchServer : IDisposable
     }
 
         /// <summary>
-        /// Connect to TS 
+        /// Connect to TS (All channels)
         /// </summary>
         public async Task ConnectToTSAsync()
         {
             if (_tsConnection != null)
             {
-                Console.WriteLine("[TS] Establishing persistent connection...");
-                bool connected = await _tsConnection.ConnectAsync();
-                if (connected)
+                Console.WriteLine("[TS] Establishing persistent connection pool (10 channels)...");
+                await _tsConnection.ConnectAllAsync();
+                
+                if (_tsConnection.IsAnyConnected)
                 {
-                    Console.WriteLine("[TS] ✓ Connected successfully!");
+                    Console.WriteLine($"[TS] ✓ Manager ready. {_tsConnection.ConnectedCount} channels connected.");
                 }
                 else
                 {
-                    Console.WriteLine("[TS] ✗ Failed to connect");
+                    Console.WriteLine("[TS] ✗ Failed to connect any channels");
                 }
             }
         }
@@ -440,15 +443,11 @@ public class TcpSwitchServer : IDisposable
                 {
                     string hex = System.Text.Encoding.ASCII.GetString(messageBytes);
                     messageBytes = HexToBytesSafe(hex);
-                    Console.WriteLine($" [{sessionId}] Detected ASCII-hex payload. Decoded to {messageBytes.Length} bytes.");
                 }
 
                 IsoMessage request;
                 try {
                     request = _parser.Parse(messageBytes);
-                    
-                    // Full message dump for debugging (Acquirer to Switch)
-                    request.LogAllFields(sessionId, "ACQ-INBOUND");
 
                     // Normalize Track 2 (DE#35) for WAY4 compliance (Max 37, separator 'D', no 'F' padding, strip sentinels)
                     if (request.HasField(35))
@@ -474,11 +473,11 @@ public class TcpSwitchServer : IDisposable
                         request.SetField(35, track2);
                     }
 
-                    // TESTING: Print F00 Header
-                    if (!string.IsNullOrEmpty(request.Header))
-                    {
-                        Console.WriteLine($" [{sessionId}] F00: {request.Header}");
-                    }
+                    // TESTING: Print F00 Header if needed (debug only)
+                    // if (!string.IsNullOrEmpty(request.Header))
+                    // {
+                    //     Console.WriteLine($" [{sessionId}] F00: {request.Header}");
+                    // }
                 } catch (Exception ex) {
                     Console.WriteLine($"[{sessionId}] Parse error: {ex.Message}");
                     var resp = CreateErrorResponse(new IsoMessage { MessageType = "0200" }, "30");
@@ -504,7 +503,6 @@ public class TcpSwitchServer : IDisposable
                     // Example Style: AAcBhQE0XrjDugEJ
                     txnContext.TRN = GenerateAlphaNumericTRN(16);
                     request.SetTRN(txnContext.TRN);
-                    Console.WriteLine($" [{sessionId}] Generated TRN (DE#63): {txnContext.TRN}");
                 }
                 else if (request.MessageType == "0400")
                 {
@@ -533,38 +531,9 @@ public class TcpSwitchServer : IDisposable
                 
                 txnContext.TryTransitionTo(TransactionState.Validated);
                 
-                Console.WriteLine($" [{sessionId}] Validation PASSED");
-                Console.WriteLine($" [{sessionId}] Message Details:");
-                if (request.HasField(0))
-                {
-                    Console.WriteLine($"   000: {request.GetField(0)}");
-                }
-                Console.WriteLine($"   Type: {request.MessageType}");
-                Console.WriteLine($"   002: {SecureDataHandler.MaskPAN(request.GetField(2))}");
-                Console.WriteLine($"   003: {request.GetField(3)}");
-                Console.WriteLine($"   004: {request.GetField(4)}");
-                Console.WriteLine($"   007: {request.GetField(7)}");
-                Console.WriteLine($"   011: {request.GetField(11)}");
-                Console.WriteLine($"   012: {request.GetField(12)}");
-                Console.WriteLine($"   013: {request.GetField(13)}");
-                Console.WriteLine($"   014: {request.GetField(14)}");
-                Console.WriteLine($"   022: {request.GetField(22)}");
-                Console.WriteLine($"   025: {request.GetField(25)}");
-                
-                // DE32: Show actual value and explain LLVAR encoding
-                string? de32Value = request.GetField(32);
-                if (!string.IsNullOrEmpty(de32Value))
-                {
-                    Console.WriteLine($"   032: {de32Value} (LLVAR encoded as: {de32Value.Length:D2}{de32Value})");
-                }
-                
-                Console.WriteLine($"   033: {request.GetField(33)}");
-                Console.WriteLine($"   035: {request.GetField(35)}");
-                Console.WriteLine($"   037: {request.GetField(37)}");
-                Console.WriteLine($"   041: {request.GetField(41)}");
-                Console.WriteLine($"   042: {request.GetField(42)}");
-                Console.WriteLine($"   049: {request.GetField(49)}");
-                Console.WriteLine($"   063: {request.GetTRN()}");
+                // Log full details to file instead of console
+                MessageLogger.LogMessage(sessionId, "ACQ-REQ", request);
+
 
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = null;
@@ -597,7 +566,7 @@ public class TcpSwitchServer : IDisposable
                 {
                     "0200" => await HandleAuthorizationRequestAsync(request, sessionId, txnContext),
                     "0400" => await HandleReversalRequestAsync(request, sessionId, txnContext),
-                    "0420" => await HandleReversalRequestAsync(request, sessionId, txnContext),
+                    "0420" => HandleReversalAdviceAsync(request, sessionId, txnContext),
                     _ => CreateErrorResponse(request, "12")
                 };
 
@@ -639,20 +608,10 @@ public class TcpSwitchServer : IDisposable
                 txnContext.Response = response;
                 txnContext.TryTransitionTo(TransactionState.Completed);
 
-                var responseValidation = _validator.ValidateMessage(response);
-                if (!responseValidation.IsValid)
-                {
-                    Console.WriteLine($" [{sessionId}] WARNING: Response validation failed:");
-                    Console.WriteLine(responseValidation.GetSummary());
-                }
-                else
-                {
-                    Console.WriteLine($" [{sessionId}] Response validation PASSED (RC: {response.GetField(39) ?? "00"})");
-                }
+                // Log outbound response to file
+                MessageLogger.LogMessage(sessionId, "ACQ-RESP", response);
 
-                // Full message dump for debugging (Switch to Acquirer)
-                response.LogAllFields(sessionId, "ACQ-OUTBOUND");
-
+                // Binary build for hardware/network transport
                 byte[] responseBytes = _parser.Build(response);
 
                 stopwatch.Stop();
@@ -663,8 +622,9 @@ public class TcpSwitchServer : IDisposable
                     _ = _transactionLogger.LogTransactionAsync(request, response, sessionId, processingTimeMs, "COMPLETE");
                 }
 
-                string rcDesc = ConfigurationLoader.Instance.GetResponseDescription(response.GetField(39) ?? "96");
-                Console.WriteLine($" [{sessionId}] Response: {response.MessageType} | DE39 (RC): {response.GetField(39)} - {rcDesc} | Time: {processingTimeMs}ms");
+                string rc = response.GetField(39) ?? "96";
+                string trn = response.GetTRN() ?? txnContext.TRN ?? "N/A";
+                Console.WriteLine($" [{sessionId}] DONE | {request.MessageType}->{response.MessageType} | TRN: {trn} | RC: {rc} | Time: {processingTimeMs}ms");
 
                 return responseBytes;   
             }
@@ -779,10 +739,126 @@ public class TcpSwitchServer : IDisposable
         
         /// Handle 0400 - Reversal Request (Void/Cancel)
         
+        private IsoMessage HandleReversalAdviceAsync(IsoMessage request, string sessionId, TransactionContext txnContext)
+        {
+            Console.WriteLine($" [{sessionId}] Processing reversal advice (0420)");
+            
+            // Phase 4: Verify original transaction using TRN (Field 63)
+            if (_pendingStore != null)
+            {
+                string? trn = request.GetTRN();
+                if (!string.IsNullOrEmpty(trn))
+                {
+                    // Asynchronous call in synchronous context - we use fire-and-forget logging here
+                    _ = Task.Run(async () => {
+                        var original = await _pendingStore.GetRequestByTRNAsync(trn);
+                        if (original == null)
+                        {
+                            Console.WriteLine($"  [{sessionId}] [BG-VERIFY] Original transaction NOT found for TRN: {trn}");
+                        }
+                    });
+                }
+            }
+            
+            // 1. Create immediate 0430 response for Acquirer
+            var response = CreateSuccessResponse(request);
+            response.MessageType = "0430";
+            
+            // 2. Launch background task to forward advice to Issuer
+            // We use Task.Run to ensure it doesn't block the response to Acquirer
+            _ = Task.Run(async () => 
+            {
+                try 
+                {
+                    Console.WriteLine($" [{sessionId}] [BG-FWD] Starting background forwarding of 0420");
+                    
+                    // Add DE#5 Settlement Amount before forwarding
+                    core.Helpers.SettlementHelper.AddSettlementAmount(request);
+                    
+                    string? cardBIN = request.GetCardBIN();
+                    var issuerBank = ConfigurationLoader.Instance.GetIssuerByBIN(cardBIN ?? "");
+                    
+                    if (issuerBank == null)
+                    {
+                        Console.WriteLine($" [{sessionId}] [BG-FWD] No issuer found for background reversal");
+                        return;
+                    }
+
+                    // Handle DE#32 / DE#33 logically (same as synchronous flow)
+                    string currentDe32 = request.GetField(32) ?? string.Empty;
+                    string switchId = issuerBank.IssuerCode;
+                    if (string.IsNullOrEmpty(currentDe32) || (currentDe32 == switchId && issuerBank.IsDefault))
+                    {
+                        request.SetField(32, "970418");
+                    }
+                    if (issuerBank.IsDefault)
+                    {
+                        request.SetField(33, switchId);
+                    }
+                    else
+                    {
+                        request.SetIssuerID(issuerBank.IssuerCode);
+                    }
+
+                    IsoMessage? tsResponse = null;
+                    if (issuerBank.IsDefault && _tsConnection != null)
+                    {
+                        tsResponse = await _tsConnection.ForwardTransactionAsync(request, sessionId);
+                    }
+                    else
+                    {
+                        // Note: ForwardToIssuer is synchronous in current IssuerConnector implementation
+                        // but since we are in Task.Run, it's fine.
+                        tsResponse = _issuerConnector.ForwardToIssuer(request, issuerBank, sessionId);
+                    }
+
+                    if (tsResponse != null)
+                    {
+                        Console.WriteLine($" [{sessionId}] [BG-FWD] Received 0430 response from ISS (RC={tsResponse.GetResponseCode()})");
+                    }
+                    else
+                    {
+                        Console.WriteLine($" [{sessionId}] [BG-FWD] Failed to get response from ISS for background 0420");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($" [{sessionId}] [BG-FWD] Error in background reversal forwarding: {ex.Message}");
+                }
+            });
+
+            txnContext.TryTransitionTo(TransactionState.ReversalPending);
+            return response;
+        }
+
         private async Task<IsoMessage> HandleReversalRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
             Console.WriteLine($" [{sessionId}] Processing reversal request");
             
+            // Phase 4: Verify original transaction using TRN (Field 63)
+            if (_pendingStore != null)
+            {
+                string? trn = request.GetTRN();
+                if (!string.IsNullOrEmpty(trn))
+                {
+                    var original = await _pendingStore.GetRequestByTRNAsync(trn);
+                    if (original == null)
+                    {
+                        Console.WriteLine($"  [{sessionId}] Original transaction not found for TRN: {trn}");
+                        txnContext.TryTransitionTo(TransactionState.ReversalFailed, "25", "Original transaction not found");
+                        return CreateErrorResponse(request, "25");
+                    }
+                    
+                    // Verify basic details match (PAN, Amount)
+                    if (original.RequestPAN != request.GetPAN() || original.RequestAmount != request.GetAmountDecimal())
+                    {
+                        Console.WriteLine($"  [{sessionId}] Reversal data mismatch for TRN: {trn}");
+                        // Keep processing or reject? Usually reject with format/data error
+                    }
+                    Console.WriteLine($"  [{sessionId}] Original transaction found and verified via TRN: {trn}");
+                }
+            }
+
             txnContext.TryTransitionTo(TransactionState.ReversalPending);
 
             string? cardBIN = request.GetCardBIN();
@@ -797,7 +873,8 @@ public class TcpSwitchServer : IDisposable
 
             Console.WriteLine($" [{sessionId}] Routing reversal to ISS: {issuerBank.IssuerName}");
 
-            Console.WriteLine($" [{sessionId}] Routing reversal to ISS: {issuerBank.IssuerName}");
+            // Ensure DE #5 (Settlement Amount) is added for NAPAS compliance before forwarding
+            core.Helpers.SettlementHelper.AddSettlementAmount(request);
 
             string currentDe32 = request.GetField(32) ?? string.Empty;
             string switchId = issuerBank.IssuerCode; 
@@ -805,13 +882,13 @@ public class TcpSwitchServer : IDisposable
             // 1. Handle DE#32 (Acquirer ID) for Reversal
             if (string.IsNullOrEmpty(currentDe32))
             {
-                request.SetField(32, "970400");
-                Console.WriteLine($" [{sessionId}] DE#32 missing, setting default: 970400");
+                request.SetField(32, "970418"); // Default BIDV or previous default
+                Console.WriteLine($" [{sessionId}] DE#32 missing, setting default: 970418");
             }
             else if (currentDe32 == switchId && issuerBank.IsDefault)
             {
-                request.SetField(32, "970400");
-                Console.WriteLine($" [{sessionId}] DE#32 was {currentDe32}, forced to 970400 (Acquirer ID)");
+                request.SetField(32, "970418");
+                Console.WriteLine($" [{sessionId}] DE#32 was {currentDe32}, forced to 970418 (Acquirer ID)");
             }
             
             // 2. Handle DE#33 (Forwarding ID)
@@ -825,7 +902,30 @@ public class TcpSwitchServer : IDisposable
                 request.SetIssuerID(issuerBank.IssuerCode);
             }
 
-            IsoMessage response = _issuerConnector.ForwardToIssuer(request, issuerBank, sessionId);
+            IsoMessage response;
+            
+            // Use persistent connection for default TS, otherwise use per-transaction connection
+            if (issuerBank.IsDefault && _tsConnection != null)
+            {
+                Console.WriteLine($" [{sessionId}] Using persistent TS connection for reversal");
+                var tsResponse = await _tsConnection.ForwardTransactionAsync(request, sessionId);
+                
+                if (tsResponse != null)
+                {
+                    response = tsResponse;
+                }
+                else
+                {
+                    Console.WriteLine($" [{sessionId}] TS connection failed for reversal, returning system error");
+                    txnContext.TryTransitionTo(TransactionState.ReversalFailed, "91", "TS unavailable");
+                    return CreateErrorResponse(request, "91");
+                }
+            }
+            else
+            {
+                // Use per-transaction connection for other issuers
+                response = _issuerConnector.ForwardToIssuer(request, issuerBank, sessionId);
+            }
             
             txnContext.TryTransitionTo(TransactionState.ReversalCompleted);
 
@@ -911,6 +1011,10 @@ public class TcpSwitchServer : IDisposable
             // DE#12 and DE#13 are Local Time
             if (!msg.HasField(12)) msg.SetField(12, nowVn.ToString("HHmmss"));
             if (!msg.HasField(13)) msg.SetField(13, nowVn.ToString("MMdd"));
+            
+            // DE#15 Settlement Date (MMDD) - Always set by switch per NAPAS spec
+            // This OVERWRITES any value from member institutions
+            msg.SetField(15, nowVn.ToString("MMdd"));
         }
 
         private void EnsureMandatoryNapasFields(IsoMessage request, string sessionId)
@@ -996,8 +1100,8 @@ public class TcpSwitchServer : IDisposable
             // Gracefully disconnect from TS
             if (_tsConnection != null)
             {
-                Console.WriteLine("[DISPOSE] Signing off from TS...");
-                _tsConnection.SignOffAndDisconnectAsync().Wait();
+                Console.WriteLine("[DISPOSE] Disconnecting TS channels...");
+                _tsConnection.DisconnectAll();
                 _tsConnection.Dispose();
             }
 

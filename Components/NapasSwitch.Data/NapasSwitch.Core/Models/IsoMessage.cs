@@ -60,6 +60,19 @@ namespace core.Models
         public string? GetAmount() => GetField(4);
         public void SetAmount(decimal amount) => SetField(4, ((long)(amount * 100)).ToString("D12"));
 
+        /// <summary>
+        /// Get Field 4 as decimal (in currency units, e.g., 100.00 instead of 10000)
+        /// </summary>
+        public decimal GetAmountDecimal()
+        {
+            var amountStr = GetField(4);
+            if (decimal.TryParse(amountStr, out decimal parsedAmount))
+            {
+                return parsedAmount / 100;
+            }
+            return 0;
+        }
+
         
         /// Field 11: System Trace Audit Number (STAN) - Unique transaction ID
         
@@ -133,11 +146,38 @@ namespace core.Models
 
         
         /// Get card BIN (first 6 digits of PAN) for routing
-        
         public string? GetCardBIN()
         {
+            // 1. Try Field 2 (PAN)
             var pan = GetPAN();
-            return pan?.Length >= 6 ? pan.Substring(0, 6) : null;
+            if (!string.IsNullOrEmpty(pan) && pan.Length >= 6)
+                return pan.Substring(0, 6);
+
+            // 2. Fallback to Field 35 (Track 2)
+            var track2 = GetField(35);
+            if (!string.IsNullOrEmpty(track2))
+            {
+                var panFromTrack2 = GetPANFromTrack2(track2);
+                if (!string.IsNullOrEmpty(panFromTrack2) && panFromTrack2.Length >= 6)
+                    return panFromTrack2.Substring(0, 6);
+            }
+
+            return null;
+        }
+
+        private string? GetPANFromTrack2(string track2)
+        {
+            // Standard ISO 7813 Track 2: ;PAN=EXPIRY... or PAN=EXPIRY...
+            // Way4/NAPAS often uses 'D' as separator
+            char[] separators = { '=', 'D', 'd' };
+            int sepIndex = track2.IndexOfAny(separators);
+            
+            string panPart = sepIndex > 0 ? track2.Substring(0, sepIndex) : track2;
+            
+            // Strip leading sentinels or spaces
+            panPart = panPart.TrimStart(';', ' ', '?', 'B');
+            
+            return panPart;
         }
 
         

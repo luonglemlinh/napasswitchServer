@@ -66,9 +66,15 @@ namespace core.ISO8583
             
             // DE4: Amount - Fixed 12 numeric
             schema.AddField(4, "Amount, Transaction", FieldType.Fixed, fixedLength: 12);
+
+            // DE5: Settlement Amount - Fixed 12 numeric
+            schema.AddField(5, "Amount, Settlement", FieldType.Fixed, fixedLength: 12);
             
             // DE7: Transmission Date/Time - Fixed 10 numeric (MMddHHmmss)
             schema.AddField(7, "Transmission Date/Time", FieldType.Fixed, fixedLength: 10);
+            
+            // DE9: Settlement Conversion Rate - Fixed 8 numeric
+            schema.AddField(9, "Conversion Rate, Settlement", FieldType.Fixed, fixedLength: 8);
             
             // DE11: STAN - Fixed 6 numeric
             schema.AddField(11, "STAN (System Trace Audit Number)", FieldType.Fixed, fixedLength: 6);
@@ -128,6 +134,9 @@ namespace core.ISO8583
             
             // DE49: Currency Code - Transaction, Fixed 3 numeric
             schema.AddField(49, "Currency Code, Transaction", FieldType.Fixed, fixedLength: 3);
+            
+            // DE50: Currency Code - Settlement, Fixed 3 numeric
+            schema.AddField(50, "Currency Code, Settlement", FieldType.Fixed, fixedLength: 3);
             
             // DE52: PIN Data - Fixed 16 hex (Disabled for testing)
             // schema.AddField(52, "PIN Data", FieldType.Fixed, fixedLength: 16);

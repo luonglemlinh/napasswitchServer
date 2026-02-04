@@ -1,0 +1,419 @@
+
+[2026-02-04 17:39:46.937] [c87b0b7d] === ACQ-REQ FULL MESSAGE DUMP ===
+   MTI: 0200
+   001 (DE1): 723C448128E08000
+   002 (PAN): 970418*********7647
+   003 (Processing Code): 000000
+   004 (Amount): 000012345600
+   007 (Transmission Date/Time): 0204173944
+   011 (STAN): 111206
+   012 (Local Time): 173944
+   013 (Local Date): 0204
+   014 (Expiration Date): 3101
+   015 (DE15): 0204
+   018 (Merchant Type): 5411
+   022 (POS Entry Mode): 022
+   025 (POS Condition Code): 00
+   032 (Acquirer ID): 970406
+   035 (Track 2): [TRACK DATA MASKED]
+   037 (RRN): 603501111206
+   041 (Terminal ID): AUTO0001
+   042 (Merchant ID): MYSOFTPOSSHOP01
+   043 (Merchant Name/Loc): MYSOFTPOS BANK         HA NOI        704
+   049 (Currency Code): 704
+   063 (TRN): 3VoGp4DusI201ABf
+[c87b0b7d] =====================================
+
+[2026-02-04 17:39:46.994] [c87b0b7d] === TS-FORWARD FULL MESSAGE DUMP ===
+   MTI: 0200
+   001 (DE1): 723C448128E08000
+   002 (PAN): 970418*********7647
+   003 (Processing Code): 000000
+   004 (Amount): 000012345600
+   007 (Transmission Date/Time): 0204173944
+   011 (STAN): 111206
+   012 (Local Time): 173944
+   013 (Local Date): 0204
+   014 (Expiration Date): 3101
+   015 (DE15): 0204
+   018 (Merchant Type): 5411
+   022 (POS Entry Mode): 022
+   025 (POS Condition Code): 00
+   032 (Acquirer ID): 970406
+   033 (Forwarding ID): 970488
+   035 (Track 2): [TRACK DATA MASKED]
+   037 (RRN): 603501111206
+   041 (Terminal ID): AUTO0001
+   042 (Merchant ID): MYSOFTPOSSHOP01
+   043 (Merchant Name/Loc): MYSOFTPOS BANK         HA NOI        704
+   049 (Currency Code): 704
+   063 (TRN): 3VoGp4DusI201ABf
+[c87b0b7d] =====================================
+
+[2026-02-04 17:39:47.908] [TS-PERSISTENT] === TS-RECV FULL MESSAGE DUMP ===
+   MTI: 0210
+   001 (DE1): F23A40010E808402
+   002 (PAN): 970418*********7647
+   003 (Processing Code): 000000
+   004 (Amount): 000012345600
+   007 (Transmission Date/Time): 0204173944
+   011 (STAN): 111206
+   012 (Local Time): 173944
+   013 (Local Date): 0204
+   015 (DE15): 0204
+   018 (Merchant Type): 5411
+   032 (Acquirer ID): 970406
+   037 (RRN): 603501111206
+   038 (Auth ID): 570396
+   039 (Response Code): 00
+   041 (Terminal ID): AUTO0001
+   049 (Currency Code): 704
+   054 (Additional Amounts): 0002704C0446129910000002704C044612991000
+   063 (TRN): 3VoGp4DusI201ABf
+   102 (Account ID 1): 0000000000000000
+[TS-PERSISTENT] =====================================
+
+[2026-02-04 17:39:47.979] [c87b0b7d] === ACQ-RESP FULL MESSAGE DUMP ===
+   MTI: 0210
+   001 (DE1): F23A40010E808402
+   002 (PAN): 970418*********7647
+   003 (Processing Code): 000000
+   004 (Amount): 000012345600
+   007 (Transmission Date/Time): 0204173944
+   011 (STAN): 111206
+   012 (Local Time): 173944
+   013 (Local Date): 0204
+   015 (DE15): 0204
+   018 (Merchant Type): 5411
+   032 (Acquirer ID): 970406
+   037 (RRN): 603501111206
+   038 (Auth ID): 570396
+   039 (Response Code): 00
+   041 (Terminal ID): AUTO0001
+   049 (Currency Code): 704
+   054 (Additional Amounts): 0002704C0446129910000002704C044612991000
+   063 (TRN): 3VoGp4DusI201ABf
+   102 (Account ID 1): 0000000000000000
+[c87b0b7d] =====================================
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ ACQ-REQ      | MTI: 0200 | TRN: qmMefrRHBWISLl02 | 2026-02-04 17:48:18.732 │
+└────────────────────────────────────────────────────────────────────────────┘
+ Session ID: 8f5a9822
+
+ === [ TRANSACTION IDENTIFIERS ] ===
+  011 (STAN              ): 111207
+  037 (RRN               ): 603501111207
+  063 (TRN               ): qmMefrRHBWISLl02
+  007 (Transmission Time ): 0204174816
+
+ === [ CARD DATA ] ===
+  002 (PAN               ): 970418*********7647
+  014 (Expiration        ): 3101
+  022 (Entry Mode        ): 022
+  035 (Track 2):        [REDACTED - SECURITY POLICY]
+
+ === [ AMOUNTS ] ===
+  004 (Amount            ): 135,555.00
+  049 (Currency          ): 704
+
+ === [ ROUTING ] ===
+  032 (Acquirer ID       ): 970406
+
+ === [ MERCHANT / TERMINAL ] ===
+  041 (Terminal ID       ): AUTO0001
+  042 (Merchant ID       ): MYSOFTPOSSHOP01
+  043 (Merchant Name/Loc ): MYSOFTPOS BANK         HA NOI        704
+  018 (Merchant Type (MCC)): 5411
+
+ === [ OTHER FIELDS ] ===
+  001 (DE1               ): 723C448128E08000
+  003 (Processing Code   ): 000000
+  012 (Local Time        ): 174816
+  013 (Local Date        ): 0204
+  015 (DE15              ): 0204
+  025 (POS Condition Code): 00
+
+--------------------------------------------------------------------------------
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ TS-FORWARD   | MTI: 0200 | TRN: qmMefrRHBWISLl02 | 2026-02-04 17:48:18.763 │
+└────────────────────────────────────────────────────────────────────────────┘
+ Session ID: 8f5a9822
+
+ === [ TRANSACTION IDENTIFIERS ] ===
+  011 (STAN              ): 111207
+  037 (RRN               ): 603501111207
+  063 (TRN               ): qmMefrRHBWISLl02
+  007 (Transmission Time ): 0204174816
+
+ === [ CARD DATA ] ===
+  002 (PAN               ): 970418*********7647
+  014 (Expiration        ): 3101
+  022 (Entry Mode        ): 022
+  035 (Track 2):        [REDACTED - SECURITY POLICY]
+
+ === [ AMOUNTS ] ===
+  004 (Amount            ): 135,555.00
+  049 (Currency          ): 704
+
+ === [ ROUTING ] ===
+  032 (Acquirer ID       ): 970406
+  033 (Forwarding ID     ): 970488
+
+ === [ MERCHANT / TERMINAL ] ===
+  041 (Terminal ID       ): AUTO0001
+  042 (Merchant ID       ): MYSOFTPOSSHOP01
+  043 (Merchant Name/Loc ): MYSOFTPOS BANK         HA NOI        704
+  018 (Merchant Type (MCC)): 5411
+
+ === [ OTHER FIELDS ] ===
+  001 (DE1               ): 723C448128E08000
+  003 (Processing Code   ): 000000
+  012 (Local Time        ): 174816
+  013 (Local Date        ): 0204
+  015 (DE15              ): 0204
+  025 (POS Condition Code): 00
+
+--------------------------------------------------------------------------------
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ TS-RECV      | MTI: 0210 | TRN: qmMefrRHBWISLl02 | 2026-02-04 17:48:19.545 │
+└────────────────────────────────────────────────────────────────────────────┘
+ Session ID: TS-PERSISTENT
+
+ === [ TRANSACTION IDENTIFIERS ] ===
+  011 (STAN              ): 111207
+  037 (RRN               ): 603501111207
+  063 (TRN               ): qmMefrRHBWISLl02
+  038 (Auth ID           ): 570397
+  007 (Transmission Time ): 0204174816
+
+ === [ CARD DATA ] ===
+  002 (PAN               ): 970418*********7647
+
+ === [ AMOUNTS ] ===
+  004 (Amount            ): 135,555.00
+  049 (Currency          ): 704
+  054 (Additional Amounts): 0002704C0445994355000002704C044599435500
+
+ === [ ROUTING ] ===
+  032 (Acquirer ID       ): 970406
+
+ === [ MERCHANT / TERMINAL ] ===
+  041 (Terminal ID       ): AUTO0001
+  018 (Merchant Type (MCC)): 5411
+
+ === [ RESPONSE DATA ] ===
+  039 (Response Code     ): 00
+  102 (Account ID 1      ): 0000000000000000
+
+ === [ OTHER FIELDS ] ===
+  001 (DE1               ): F23A40010E808402
+  003 (Processing Code   ): 000000
+  012 (Local Time        ): 174816
+  013 (Local Date        ): 0204
+  015 (DE15              ): 0204
+
+--------------------------------------------------------------------------------
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ ACQ-RESP     | MTI: 0210 | TRN: qmMefrRHBWISLl02 | 2026-02-04 17:48:19.596 │
+└────────────────────────────────────────────────────────────────────────────┘
+ Session ID: 8f5a9822
+
+ === [ TRANSACTION IDENTIFIERS ] ===
+  011 (STAN              ): 111207
+  037 (RRN               ): 603501111207
+  063 (TRN               ): qmMefrRHBWISLl02
+  038 (Auth ID           ): 570397
+  007 (Transmission Time ): 0204174816
+
+ === [ CARD DATA ] ===
+  002 (PAN               ): 970418*********7647
+
+ === [ AMOUNTS ] ===
+  004 (Amount            ): 135,555.00
+  049 (Currency          ): 704
+  054 (Additional Amounts): 0002704C0445994355000002704C044599435500
+
+ === [ ROUTING ] ===
+  032 (Acquirer ID       ): 970406
+
+ === [ MERCHANT / TERMINAL ] ===
+  041 (Terminal ID       ): AUTO0001
+  018 (Merchant Type (MCC)): 5411
+
+ === [ RESPONSE DATA ] ===
+  039 (Response Code     ): 00
+  102 (Account ID 1      ): 0000000000000000
+
+ === [ OTHER FIELDS ] ===
+  001 (DE1               ): F23A40010E808402
+  003 (Processing Code   ): 000000
+  012 (Local Time        ): 174816
+  013 (Local Date        ): 0204
+  015 (DE15              ): 0204
+
+--------------------------------------------------------------------------------
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ ACQ-REQ      | MTI: 0200 | TRN: a6zcsGMFn7sNRJE8 | 2026-02-04 17:52:28.938 │
+└────────────────────────────────────────────────────────────────────────────┘
+ Session ID: 8cd1c472
+
+ === [ TRANSACTION IDENTIFIERS ] ===
+  011 (STAN              ): 111208
+  037 (RRN               ): 603501111208
+  063 (TRN               ): a6zcsGMFn7sNRJE8
+  007 (Transmission Time ): 0204175226
+
+ === [ CARD DATA ] ===
+  002 (PAN               ): 970418*********7647
+  014 (Expiration        ): 3101
+  022 (Entry Mode        ): 022
+  035 (Track 2):        [REDACTED - SECURITY POLICY]
+
+ === [ AMOUNTS ] ===
+  004 (Amount            ): 123,454.00
+  049 (Currency          ): 704
+
+ === [ ROUTING ] ===
+  032 (Acquirer ID       ): 970406
+
+ === [ MERCHANT / TERMINAL ] ===
+  041 (Terminal ID       ): AUTO0001
+  042 (Merchant ID       ): MYSOFTPOSSHOP01
+  043 (Merchant Name/Loc ): MYSOFTPOS BANK         HA NOI        704
+  018 (Merchant Type (MCC)): 5411
+
+ === [ OTHER FIELDS ] ===
+  001 (DE1               ): 723C448128E08000
+  003 (Processing Code   ): 000000
+  012 (Local Time        ): 175226
+  013 (Local Date        ): 0204
+  015 (DE15              ): 0204
+  025 (POS Condition Code): 00
+
+--------------------------------------------------------------------------------
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ TS-FORWARD   | MTI: 0200 | TRN: a6zcsGMFn7sNRJE8 | 2026-02-04 17:52:28.981 │
+└────────────────────────────────────────────────────────────────────────────┘
+ Session ID: 8cd1c472
+
+ === [ TRANSACTION IDENTIFIERS ] ===
+  011 (STAN              ): 111208
+  037 (RRN               ): 603501111208
+  063 (TRN               ): a6zcsGMFn7sNRJE8
+  007 (Transmission Time ): 0204175226
+
+ === [ CARD DATA ] ===
+  002 (PAN               ): 970418*********7647
+  014 (Expiration        ): 3101
+  022 (Entry Mode        ): 022
+  035 (Track 2):        [REDACTED - SECURITY POLICY]
+
+ === [ AMOUNTS ] ===
+  004 (Amount            ): 123,454.00
+  049 (Currency          ): 704
+
+ === [ ROUTING ] ===
+  032 (Acquirer ID       ): 970406
+  033 (Forwarding ID     ): 970488
+
+ === [ MERCHANT / TERMINAL ] ===
+  041 (Terminal ID       ): AUTO0001
+  042 (Merchant ID       ): MYSOFTPOSSHOP01
+  043 (Merchant Name/Loc ): MYSOFTPOS BANK         HA NOI        704
+  018 (Merchant Type (MCC)): 5411
+
+ === [ OTHER FIELDS ] ===
+  001 (DE1               ): 723C448128E08000
+  003 (Processing Code   ): 000000
+  012 (Local Time        ): 175226
+  013 (Local Date        ): 0204
+  015 (DE15              ): 0204
+  025 (POS Condition Code): 00
+
+--------------------------------------------------------------------------------
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ TS-RECV      | MTI: 0210 | TRN: a6zcsGMFn7sNRJE8 | 2026-02-04 17:52:29.599 │
+└────────────────────────────────────────────────────────────────────────────┘
+ Session ID: TS-PERSISTENT
+
+ === [ TRANSACTION IDENTIFIERS ] ===
+  011 (STAN              ): 111208
+  037 (RRN               ): 603501111208
+  063 (TRN               ): a6zcsGMFn7sNRJE8
+  038 (Auth ID           ): 570398
+  007 (Transmission Time ): 0204175226
+
+ === [ CARD DATA ] ===
+  002 (PAN               ): 970418*********7647
+
+ === [ AMOUNTS ] ===
+  004 (Amount            ): 123,454.00
+  049 (Currency          ): 704
+  054 (Additional Amounts): 0002704C0445870901000002704C044587090100
+
+ === [ ROUTING ] ===
+  032 (Acquirer ID       ): 970406
+
+ === [ MERCHANT / TERMINAL ] ===
+  041 (Terminal ID       ): AUTO0001
+  018 (Merchant Type (MCC)): 5411
+
+ === [ RESPONSE DATA ] ===
+  039 (Response Code     ): 00
+  102 (Account ID 1      ): 0000000000000000
+
+ === [ OTHER FIELDS ] ===
+  001 (DE1               ): F23A40010E808402
+  003 (Processing Code   ): 000000
+  012 (Local Time        ): 175226
+  013 (Local Date        ): 0204
+  015 (DE15              ): 0204
+
+--------------------------------------------------------------------------------
+
+┌────────────────────────────────────────────────────────────────────────────┐
+│ ACQ-RESP     | MTI: 0210 | TRN: a6zcsGMFn7sNRJE8 | 2026-02-04 17:52:29.676 │
+└────────────────────────────────────────────────────────────────────────────┘
+ Session ID: 8cd1c472
+
+ === [ TRANSACTION IDENTIFIERS ] ===
+  011 (STAN              ): 111208
+  037 (RRN               ): 603501111208
+  063 (TRN               ): a6zcsGMFn7sNRJE8
+  038 (Auth ID           ): 570398
+  007 (Transmission Time ): 0204175226
+
+ === [ CARD DATA ] ===
+  002 (PAN               ): 970418*********7647
+
+ === [ AMOUNTS ] ===
+  004 (Amount            ): 123,454.00
+  049 (Currency          ): 704
+  054 (Additional Amounts): 0002704C0445870901000002704C044587090100
+
+ === [ ROUTING ] ===
+  032 (Acquirer ID       ): 970406
+
+ === [ MERCHANT / TERMINAL ] ===
+  041 (Terminal ID       ): AUTO0001
+  018 (Merchant Type (MCC)): 5411
+
+ === [ RESPONSE DATA ] ===
+  039 (Response Code     ): 00
+  102 (Account ID 1      ): 0000000000000000
+
+ === [ OTHER FIELDS ] ===
+  001 (DE1               ): F23A40010E808402
+  003 (Processing Code   ): 000000
+  012 (Local Time        ): 175226
+  013 (Local Date        ): 0204
+  015 (DE15              ): 0204
+
+--------------------------------------------------------------------------------

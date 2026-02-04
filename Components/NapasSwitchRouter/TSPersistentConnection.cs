@@ -9,6 +9,7 @@ using core.Models;
 using core.Models.Configuration;
 using core.ISO8583;
 using core.Security;
+using core.Helpers;
 
 namespace router
 {
@@ -169,13 +170,13 @@ namespace router
                  var msg = _parser.Parse(rawData);
                  string maskedPan = SecureDataHandler.MaskPAN(msg.GetField(2));
                  string rc = msg.GetResponseCode();
-                  Console.WriteLine($"[TS-RECV] MTI: {msg.MessageType} | PAN: {maskedPan} | STAN: {msg.GetField(11)} | RC: {rc}");
+                  Console.WriteLine($"[TS-RECV] {msg.MessageType} | TRN: {msg.GetTRN() ?? "N/A"} | RC: {msg.GetResponseCode()}");
                   
                   // Full message dump for debugging (TS to Switch)
-                  // Skip dump for Heartbeat/Network messages (08xx) to avoid log spam
+                  // Log to file instead of console log spam
                   if (!msg.MessageType.StartsWith("08"))
                   {
-                      msg.LogAllFields("TS-PERSISTENT", "TS-RECV");
+                      MessageLogger.LogMessage("TS-PERSISTENT", "TS-RECV", msg);
                   }
 
                   if (rc == "30")
@@ -337,8 +338,9 @@ namespace router
         {
             if (!IsConnected) await ConnectAsync();
             
-            // Full message dump for debugging (Switch to TS)
-            request.LogAllFields(sessionId, "TS-FORWARD");
+            // Log message before forwarding to TS
+            MessageLogger.LogMessage(sessionId, "TS-FORWARD", request);
+            Console.WriteLine($"[{sessionId}] [TS-FWD] {request.MessageType} | TRN: {request.GetTRN() ?? "N/A"}");
             
             try
             {

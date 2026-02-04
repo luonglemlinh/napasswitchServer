@@ -312,11 +312,14 @@ namespace router
             };
 
             // Copy fields from original request
-            foreach (var field in new[] { 2, 3, 4, 7, 11, 12, 13, 32, 33, 37, 41, 42, 49, 63 })
+            foreach (var field in new[] { 2, 3, 4, 7, 9, 11, 12, 13, 32, 33, 37, 41, 42, 49, 50, 63 })
             {
                 if (context.Request.HasField(field))
                     reversal.SetField(field, context.Request.GetField(field));
             }
+
+            // Calculate DE #5 (Settlement Amount) if DE #4 and DE #9 are present
+            core.Helpers.SettlementHelper.AddSettlementAmount(reversal);
 
             // Set reversal reason: timeout
             reversal.SetField(56, "4021"); // Transaction timeout

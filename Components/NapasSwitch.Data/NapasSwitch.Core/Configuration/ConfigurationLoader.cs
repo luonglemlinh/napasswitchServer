@@ -147,6 +147,23 @@ namespace core.Configuration
             
             foreach (var bank in _binRouting!.Banks)
             {
+                // ENVIRONMENT OVERRIDES
+                // Allows setting NAPAS_BIN_HOST_TCB or NAPAS_BIN_PORT_TS to override XML values
+                string envHost = Environment.GetEnvironmentVariable($"NAPAS_BIN_HOST_{bank.BankCode}");
+                string envPort = Environment.GetEnvironmentVariable($"NAPAS_BIN_PORT_{bank.BankCode}");
+
+                if (!string.IsNullOrEmpty(envHost))
+                {
+                    Console.WriteLine($"[CONFIG] Overriding {bank.BankCode} Host: {bank.Host} -> {envHost}");
+                    bank.Host = envHost;
+                }
+
+                if (!string.IsNullOrEmpty(envPort) && int.TryParse(envPort, out int portVal))
+                {
+                    Console.WriteLine($"[CONFIG] Overriding {bank.BankCode} Port: {bank.Port} -> {portVal}");
+                    bank.Port = portVal;
+                }
+
                 // Check if this is the default/fallback issuer
                 if (bank.IsDefault)
                 {
