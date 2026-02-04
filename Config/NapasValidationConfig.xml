@@ -406,14 +406,19 @@
     </DataElement>
 
     <!-- DE#70 -->
-    <DataElement Number="70" Name="" Description="">
+    <DataElement Number="70" Name="DE70_NetworkManagementCode" Description="Network Management Information Code">
       <MinLength>3</MinLength>
       <MaxLength>3</MaxLength>
       <DataType>N</DataType>
       <Pattern>^[0-9]{3}$</Pattern>
-      <RequiredIn></RequiredIn>
+      <RequiredIn>0800,0810</RequiredIn>
       <ErrorCode>30</ErrorCode>
-      <ErrorMessage>Invalid network management information code</ErrorMessage>
+      <ErrorMessage>Invalid network management information code - must be 3 numeric digits</ErrorMessage>
+      <AllowedValues>
+        <Value>001</Value> <!-- Sign on -->
+        <Value>002</Value> <!-- Sign off -->
+        <Value>301</Value> <!-- Echo test -->
+      </AllowedValues>
     </DataElement>
 
     <!-- DE#90 -->
