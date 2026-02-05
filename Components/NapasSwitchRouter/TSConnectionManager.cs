@@ -23,7 +23,7 @@ namespace router
         public int ConnectedCount => _channels.Count(c => c.IsConnected);
         public string TSName => _tsConfig.IssuerName;
 
-        public TSConnectionManager(IssuerBankConfig tsConfig, int channelCount = 10, int heartbeatIntervalMs = 75000)
+        public TSConnectionManager(IssuerBankConfig tsConfig, int channelCount = 1, int heartbeatIntervalMs = 75000)
         {
             _tsConfig = tsConfig ?? throw new ArgumentNullException(nameof(tsConfig));
             _channelCount = channelCount;

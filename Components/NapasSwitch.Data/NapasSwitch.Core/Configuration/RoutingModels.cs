@@ -19,8 +19,24 @@ namespace core.Models.Configuration
         public string IssuerCode { get; set; } = string.Empty;
         public string IssuerName { get; set; } = string.Empty;
         public string Host { get; set; } = string.Empty;
+        [XmlIgnore]
         public int Port { get; set; }
+        [XmlIgnore]
         public int Timeout { get; set; }
+
+        [XmlElement("Port")]
+        public string PortString
+        {
+            get => Port.ToString();
+            set => Port = int.TryParse(value, out int result) ? result : 0;
+        }
+
+        [XmlElement("Timeout")]
+        public string TimeoutString
+        {
+            get => Timeout.ToString();
+            set => Timeout = int.TryParse(value, out int result) ? result : 30000;
+        }
         
         /// <summary>
         /// If true, this issuer is used as fallback when no BIN match is found
@@ -48,9 +64,33 @@ namespace core.Models.Configuration
         public string AcquirerCode { get; set; } = string.Empty;
         public string AcquirerID { get; set; } = string.Empty;
         public string Host { get; set; } = string.Empty;
+        [XmlIgnore]
         public int Port { get; set; }
+        [XmlIgnore]
         public int Timeout { get; set; }
+        [XmlIgnore]
         public int MaxConnections { get; set; }
+
+        [XmlElement("Port")]
+        public string PortString
+        {
+            get => Port.ToString();
+            set => Port = int.TryParse(value, out int result) ? result : 0;
+        }
+
+        [XmlElement("Timeout")]
+        public string TimeoutString
+        {
+            get => Timeout.ToString();
+            set => Timeout = int.TryParse(value, out int result) ? result : 30000;
+        }
+
+        [XmlElement("MaxConnections")]
+        public string MaxConnectionsString
+        {
+            get => MaxConnections.ToString();
+            set => MaxConnections = int.TryParse(value, out int result) ? result : 1;
+        }
     }
 
     [XmlRoot("ResponseCodeConfiguration")]

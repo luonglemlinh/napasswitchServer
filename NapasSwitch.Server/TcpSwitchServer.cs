@@ -39,8 +39,8 @@ public class TcpSwitchServer : IDisposable
     private Timer? _poolHealthTimer;
     private Timer? _cleanupTimer;
 
-    // Persistent connection manager for TS (Transaction Switch) - Supports 10 concurrent channels
-    private TSConnectionManager? _tsConnection;
+    // Persistent connection managers for all issuers
+    private readonly ConcurrentDictionary<string, TSConnectionManager> _issuerConnections = new();
 
     // Thread-safe collection to track active connections
     // ConcurrentDictionary = multiple threads can access it safely!
@@ -85,48 +85,48 @@ public class TcpSwitchServer : IDisposable
     }
 
     /// <summary>
-    /// Initialize persistent connection to the default TS
+    /// Initialize persistent connections to all issuers
     /// </summary>
     private void InitializeTSConnection()
     {
-        // Find the default TS from configuration
         var allIssuers = ConfigurationLoader.Instance.GetAllIssuers();
-        var defaultTS = allIssuers.FirstOrDefault(i => i.IsDefault);
-            
-        if (defaultTS != null)
+        foreach (var issuer in allIssuers)
         {
-            Console.WriteLine($"[INIT] Found default TS: {defaultTS.IssuerName} at {defaultTS.Host}:{defaultTS.Port}");
-            // Initialize manager with 10 channels for the default TS
-            _tsConnection = new TSConnectionManager(defaultTS, channelCount: 10, heartbeatIntervalMs: 30000);
-            Console.WriteLine("[INIT] TS connection manager initialized with 10 parallel channels");
+            // Skip if host or port is missing - User may have cleared them to disable H2H
+            if (string.IsNullOrWhiteSpace(issuer.Host) || issuer.Port <= 0)
+            {
+                Console.WriteLine($"[INIT] Skipping H2H connection for {issuer.IssuerName} (No Host/Port)");
+                continue;
+            }
+
+            // Default NAPAS TS or any issuer can be persistent
+            // For now we persist all configured issuers to avoid connection overhead
+            Console.WriteLine($"[INIT] Initializing persistent H2H connection for: {issuer.IssuerName} at {issuer.Host}:{issuer.Port}");
+            var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
+            _issuerConnections[issuer.IssuerCode] = manager;
+        }
+        
+        if (_issuerConnections.IsEmpty)
+        {
+            Console.WriteLine("[INIT] No issuers configured for persistent connections");
         }
         else
         {
-            Console.WriteLine("[INIT] No default TS configured, using per-transaction connections");
-            _tsConnection = null;
+            Console.WriteLine($"[INIT] {_issuerConnections.Count} connection managers initialized");
         }
     }
 
-        /// <summary>
-        /// Connect to TS (All channels)
-        /// </summary>
-        public async Task ConnectToTSAsync()
-        {
-            if (_tsConnection != null)
-            {
-                Console.WriteLine("[TS] Establishing persistent connection pool (10 channels)...");
-                await _tsConnection.ConnectAllAsync();
-                
-                if (_tsConnection.IsAnyConnected)
-                {
-                    Console.WriteLine($"[TS] ✓ Manager ready. {_tsConnection.ConnectedCount} channels connected.");
-                }
-                else
-                {
-                    Console.WriteLine("[TS] ✗ Failed to connect any channels");
-                }
-            }
-        }
+    /// <summary>
+    /// Connect to all configured issuers
+    /// </summary>
+    public async Task ConnectToTSAsync()
+    {
+        Console.WriteLine("[TS-MGR] Connecting to all issuers...");
+        var tasks = _issuerConnections.Values.Select(m => m.ConnectAllAsync());
+        await Task.WhenAll(tasks);
+        Console.WriteLine("[TS-MGR] All connection attempts completed");
+    }
+
 
         private string FindValidationConfigPath()
         {
@@ -174,7 +174,8 @@ public class TcpSwitchServer : IDisposable
         private void LogPoolHealth(object? state)
         {
             var poolStats = _issuerConnector.GetPoolStats();
-            Console.WriteLine($"[POOL] Total: {poolStats.TotalPooledConnections} | Active: {poolStats.TotalActivedConnections} | Pools: {poolStats.PoolCount}");
+            int persistentConnected = _issuerConnections.Values.Count(c => c.IsAnyConnected);
+            Console.WriteLine($"[POOL] Total: {poolStats.TotalPooledConnections} | Active: {poolStats.TotalActivedConnections} | H2H: {persistentConnected}/{_issuerConnections.Count}");
         }
         
         private void OnTransactionTimeout(TransactionContext context)
@@ -556,13 +557,18 @@ public class TcpSwitchServer : IDisposable
             IsoMessage? response = null;
             try 
             {
-                if (issuerBank.IsDefault && _tsConnection != null)
+                // Try persistent connection manager first
+                if (_issuerConnections.TryGetValue(issuerBank.IssuerCode, out var persistentManager) && persistentManager.IsAnyConnected)
                 {
-                    response = await _tsConnection.ForwardTransactionAsync(request, sessionId);
+                    response = await persistentManager.ForwardTransactionAsync(request, sessionId);
                 }
                 else
                 {
-                    response = _issuerConnector.ForwardToIssuer(request, issuerBank, sessionId);
+                    // Fallback to per-transaction pooling
+                    if (!issuerBank.IsDefault)
+                        Console.WriteLine($" [{sessionId}] [ROUTING] No active persistent connection for {issuerBank.IssuerName}, falling back to pool");
+                    
+                    response = await _issuerConnector.ForwardToIssuerAsync(request, issuerBank, sessionId);
                 }
             }
             catch (Exception ex)
@@ -822,13 +828,20 @@ public class TcpSwitchServer : IDisposable
 
             Stop();
 
-            // Gracefully disconnect from TS
-            if (_tsConnection != null)
+            // Gracefully disconnect from all persistent issuer connections
+            foreach (var manager in _issuerConnections.Values)
             {
-                Console.WriteLine("[DISPOSE] Disconnecting TS channels...");
-                _tsConnection.DisconnectAll();
-                _tsConnection.Dispose();
+                try
+                {
+                    manager.DisconnectAll();
+                    manager.Dispose();
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[DISPOSE] Error cleaning up manager: {ex.Message}");
+                }
             }
+            _issuerConnections.Clear();
 
             _statsTimer?.Dispose();
             _poolHealthTimer?.Dispose();
