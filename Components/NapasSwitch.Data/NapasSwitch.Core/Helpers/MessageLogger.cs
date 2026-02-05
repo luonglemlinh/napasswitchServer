@@ -15,9 +15,12 @@ namespace core.Helpers
         private static readonly string LogDir = @"c:\Users\admin\source\repos\napasswitchServer\Logs";
         private static readonly string LogFilePath = Path.Combine(LogDir, "message_log.txt");
         private static readonly object _lock = new object();
+        private static bool _initialized = false;
 
-        static MessageLogger()
+        private static void EnsureInitialized()
         {
+            if (_initialized) return;
+
             try
             {
                 if (!Directory.Exists(LogDir))
@@ -34,8 +37,9 @@ namespace core.Helpers
                         File.Move(LogFilePath, Path.Combine(LogDir, $"message_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt"));
                     }
                 }
+                _initialized = true;
             }
-            catch { /* Ignore logging errors */ }
+            catch { /* Ignore logging errors to prevent crash */ }
         }
 
         public static void LogMessage(string sessionId, string direction, IsoMessage message)
@@ -44,6 +48,7 @@ namespace core.Helpers
             {
                 lock (_lock)
                 {
+                    EnsureInitialized();
                     using (var writer = new StreamWriter(LogFilePath, append: true))
                     {
                         string trn = message.GetTRN() ?? "N/A";
