@@ -204,7 +204,6 @@ namespace data
             var command = new SqlCommand(@"
                 UPDATE PendingTransactions 
                 SET Status = 'MATCHED', 
-                    ResponseReceivedAt = @VietnamTime,
                     ResponseCode = @ResponseCode,
                     UpdatedAt = @VietnamTime
                 WHERE TransactionId = @TransactionId", connection);
@@ -225,7 +224,6 @@ namespace data
             var command = new SqlCommand(@"
                 UPDATE PendingTransactions 
                 SET Status = 'MISMATCH', 
-                    ResponseReceivedAt = @VietnamTime,
                     ResponseCode = @ErrorReason,
                     UpdatedAt = @VietnamTime
                 WHERE TransactionId = @TransactionId", connection);
@@ -266,7 +264,8 @@ namespace data
             var command = new SqlCommand(@"
                 SELECT COUNT(*) FROM PendingTransactions WHERE Status = 'PENDING'", connection);
 
-            return (int)await command.ExecuteScalarAsync();
+            var result = await command.ExecuteScalarAsync();
+            return result != null ? Convert.ToInt32(result) : 0;
         }
     }
 

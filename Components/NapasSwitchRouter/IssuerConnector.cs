@@ -129,7 +129,6 @@ namespace router
                 
                 int responseLength;
                 byte[] responseBytes;
-                int dataOffset = 0;
 
                 // Try to detect response format
                 // Check if first 2 bytes look like a valid 2-byte length (common format)

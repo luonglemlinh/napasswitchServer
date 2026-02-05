@@ -86,8 +86,6 @@ namespace router
                 
                 if (signOnSuccess)
                 {
-                    // Start heartbeat timer
-                    // StartHeartbeat(); // DISABLED: Using TCP Keep-Alive instead
                     Console.WriteLine($"[TS-CONN] Successfully connected and signed on to {_tsConfig.IssuerName}");
                     return true;
                 }
@@ -167,10 +165,9 @@ namespace router
         {
             try
             {
-                 var msg = _parser.Parse(rawData);
-                 string maskedPan = SecureDataHandler.MaskPAN(msg.GetField(2));
-                 string rc = msg.GetResponseCode();
-                  Console.WriteLine($"[TS-RECV] {msg.MessageType} | TRN: {msg.GetTRN() ?? "N/A"} | RC: {msg.GetResponseCode()}");
+                var msg = _parser.Parse(rawData);
+                string rc = msg.GetResponseCode() ?? "96";
+                Console.WriteLine($"[TS-RECV] {msg.MessageType} | TRN: {msg.GetTRN() ?? "N/A"} | RC: {rc}");
                   
                   // Full message dump for debugging (TS to Switch)
                   // Log to file instead of console log spam
@@ -201,9 +198,7 @@ namespace router
 
             if (mti == "0800")
             {
-                // Incoming Echo Request -> Send 0810 Response
-                Console.WriteLine($"[TS-RECV] Handling Check/Heartbeat Request from TS (DISABLED FOR TESTING)");
-                // _ = SendEchoResponseAsync(msg);
+                Console.WriteLine($"[TS-RECV] Handling Check/Heartbeat Request from TS (AUTO-0810)");
             }
             else if (IsResponseMTI(mti))
             {
@@ -435,7 +430,6 @@ namespace router
 
         public async Task SignOffAndDisconnectAsync()
         {
-            // Optional: Implement proper sign off
             Disconnect(); 
             await Task.CompletedTask;
         }
@@ -455,7 +449,6 @@ namespace router
                 // Structure: [on/off (4 bytes)][keepalivetime (4 bytes)][keepaliveinterval (4 bytes)]
                 // Time/Interval are in milliseconds
                 
-                uint dummy = 0;
                 byte[] inOptionValues = new byte[12];
                 
                 // On/Off: 1 (Enabled)

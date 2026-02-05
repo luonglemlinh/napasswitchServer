@@ -7,36 +7,19 @@ namespace router
 {
     
     /// Transaction states in the switch processing lifecycle
+    /// Simplified for clarity: RECEIVED ? ROUTING ? COMPLETED/FAILED/REVERSING ? REVERSED
     
     public enum TransactionState
     {
-        // Initial states
-        Received,           // Message received from ACQ
-        Validated,          // Message passed validation
+        // Core states - simpler mental model for new developers
+        Received,           // Initial message from ACQ
+        Routing,            // Validated and being routed (combines Validated + AwaitingResponse)
+        Completed,          // Finished successfully
+        Failed,             // Processing failed (any error)
         
-        // Routing states
-        RoutingToIssuer,    // Being forwarded to ISS
-        AwaitingResponse,   // Waiting for ISS response
-        
-        // Response states
-        ResponseReceived,   // Got response from ISS
-        Completed,          // Successfully completed
-        
-        // Error states
-        ValidationFailed,   // Message validation failed
-        RoutingFailed,      // Could not route to ISS
-        Timeout,            // ISS did not respond in time
-        SystemError,        // Internal error
-        
-        // Reversal states
-        ReversalRequired,   // Original timed out, need to reverse
-        ReversalPending,    // Reversal sent to ISS
-        ReversalCompleted,  // Reversal confirmed
-        ReversalFailed,     // Reversal failed - needs manual intervention
-        
-        // Partial reversal states
-        PartialReversalPending,
-        PartialReversalCompleted
+        // Reversal states  
+        Reversing,          // Reversal in progress (combines ReversalRequired + ReversalPending)
+        Reversed            // Reversal completed or failed
     }
 
     
@@ -53,7 +36,6 @@ namespace router
         public IsoMessage? ReversalResponse { get; set; }
         public DateTime CreatedAt { get; set; }
         public DateTime? SentToIssuerAt { get; set; }
-        public DateTime? ResponseReceivedAt { get; set; }
         public DateTime? CompletedAt { get; set; }
         public int RetryCount { get; set; }
         public string? ErrorCode { get; set; }
@@ -75,83 +57,22 @@ namespace router
         {
             lock (_lock)
             {
-                if (!IsValidTransition(State, newState))
+                // Once terminal, stay terminal (unless moving to reversal)
+                if (IsTerminalState() && newState != TransactionState.Reversing && newState != TransactionState.Reversed)
                 {
-                    Console.WriteLine($"[STATE-MACHINE] Invalid transition: {State} -> {newState} for {TransactionId}");
                     return false;
                 }
 
-                var oldState = State;
                 State = newState;
                 ErrorCode = errorCode;
                 ErrorMessage = errorMessage;
 
-                // Update timestamps
-                switch (newState)
-                {
-                    case TransactionState.RoutingToIssuer:
-                        SentToIssuerAt = DateTime.UtcNow;
-                        break;
-                    case TransactionState.ResponseReceived:
-                        ResponseReceivedAt = DateTime.UtcNow;
-                        break;
-                    case TransactionState.Completed:
-                    case TransactionState.ReversalCompleted:
-                    case TransactionState.ReversalFailed:
-                        CompletedAt = DateTime.UtcNow;
-                        break;
-                }
+                if (newState == TransactionState.Routing) SentToIssuerAt = DateTime.UtcNow;
+                if (IsTerminalState()) CompletedAt = DateTime.UtcNow;
 
-                Console.WriteLine($"[STATE-MACHINE] {TransactionId}: {oldState} -> {newState}");
+                Console.WriteLine($"[STATE] {TransactionId}: {newState}");
                 return true;
             }
-        }
-
-        
-        /// Check if a state transition is valid
-        
-        private static bool IsValidTransition(TransactionState from, TransactionState to)
-        {
-            return (from, to) switch
-            {
-                // Normal flow
-                (TransactionState.Received, TransactionState.Validated) => true,
-                (TransactionState.Received, TransactionState.ValidationFailed) => true,
-                (TransactionState.Validated, TransactionState.RoutingToIssuer) => true,
-                (TransactionState.Validated, TransactionState.RoutingFailed) => true,
-                (TransactionState.RoutingToIssuer, TransactionState.AwaitingResponse) => true,
-                (TransactionState.RoutingToIssuer, TransactionState.RoutingFailed) => true,
-                (TransactionState.RoutingToIssuer, TransactionState.ResponseReceived) => true, // Allowed for fast async response
-                (TransactionState.RoutingToIssuer, TransactionState.Completed) => true,        // Allowed for direct completion
-                (TransactionState.AwaitingResponse, TransactionState.ResponseReceived) => true,
-                (TransactionState.AwaitingResponse, TransactionState.Timeout) => true,
-                (TransactionState.ResponseReceived, TransactionState.Completed) => true,
-                
-                // Direct Reversal (e.g. 0420)
-                (TransactionState.Validated, TransactionState.ReversalPending) => true,
-                // Early completion (blocking validation filters, etc)
-                (TransactionState.Validated, TransactionState.Completed) => true,
-
-                // Error flows
-                (TransactionState.RoutingToIssuer, TransactionState.Timeout) => true,
-                (TransactionState.RoutingToIssuer, TransactionState.SystemError) => true,
-                (TransactionState.RoutingToIssuer, TransactionState.ValidationFailed) => true, // Allowed if response fails validation
-                (TransactionState.AwaitingResponse, TransactionState.SystemError) => true,
-                (TransactionState.ResponseReceived, TransactionState.SystemError) => true,     // Allowed if processing response fails
-                
-                // Reversal flows
-                (TransactionState.Timeout, TransactionState.ReversalRequired) => true,
-                (TransactionState.ReversalRequired, TransactionState.ReversalPending) => true,
-                (TransactionState.ReversalPending, TransactionState.ReversalCompleted) => true,
-                (TransactionState.ReversalPending, TransactionState.ReversalFailed) => true,
-                
-                // Partial reversal
-                (TransactionState.Completed, TransactionState.PartialReversalPending) => true,
-                (TransactionState.PartialReversalPending, TransactionState.PartialReversalCompleted) => true,
-                (TransactionState.PartialReversalPending, TransactionState.ReversalFailed) => true,
-
-                _ => false
-            };
         }
 
         public TimeSpan? GetProcessingTime()
@@ -164,10 +85,8 @@ namespace router
         public bool IsTerminalState()
         {
             return State == TransactionState.Completed ||
-                   State == TransactionState.ValidationFailed ||
-                   State == TransactionState.ReversalCompleted ||
-                   State == TransactionState.ReversalFailed ||
-                   State == TransactionState.PartialReversalCompleted;
+                   State == TransactionState.Failed ||
+                   State == TransactionState.Reversed;
         }
     }
 
@@ -261,9 +180,7 @@ namespace router
             {
                 var context = kvp.Value;
 
-                // Check for transaction timeout (waiting for ISS response)
-                if (context.State == TransactionState.AwaitingResponse ||
-                    context.State == TransactionState.RoutingToIssuer)
+                if (context.State == TransactionState.Routing)
                 {
                     if (context.SentToIssuerAt.HasValue && 
                         now - context.SentToIssuerAt.Value > _transactionTimeout)
@@ -272,7 +189,7 @@ namespace router
                     }
                 }
 
-                // Clean up stale completed transactions
+                // Clean up stale completed/failed transactions
                 if (context.IsTerminalState() && 
                     context.CompletedAt.HasValue &&
                     now - context.CompletedAt.Value > _staleTransactionTimeout)
@@ -284,7 +201,7 @@ namespace router
 
         private void HandleTimeout(TransactionContext context)
         {
-            if (context.TryTransitionTo(TransactionState.Timeout))
+            if (context.TryTransitionTo(TransactionState.Failed))
             {
                 Console.WriteLine($"[STATE-MACHINE] Transaction {context.TransactionId} TIMED OUT");
                 OnTransactionTimeout?.Invoke(context);
@@ -292,7 +209,7 @@ namespace router
                 // For authorization requests, we may need to send reversal
                 if (context.Request?.MessageType == "0200")
                 {
-                    context.TryTransitionTo(TransactionState.ReversalRequired);
+                    context.TryTransitionTo(TransactionState.Reversing);
                     OnReversalRequired?.Invoke(context);
                 }
             }
@@ -325,7 +242,7 @@ namespace router
             reversal.SetField(56, "4021"); // Transaction timeout
 
             context.ReversalRequest = reversal;
-            context.TryTransitionTo(TransactionState.ReversalPending);
+            context.TryTransitionTo(TransactionState.Reversing);
 
             return reversal;
         }
@@ -337,26 +254,22 @@ namespace router
 
         public TransactionStateMachineStats GetStats()
         {
-            int pending = 0, completed = 0, failed = 0, reversals = 0;
+            int routing = 0, completed = 0, failed = 0, reversals = 0;
 
             foreach (var kvp in _transactions)
             {
                 switch (kvp.Value.State)
                 {
-                    case TransactionState.RoutingToIssuer:
-                    case TransactionState.AwaitingResponse:
-                        pending++;
+                    case TransactionState.Routing:
+                        routing++;
                         break;
                     case TransactionState.Completed:
                         completed++;
                         break;
-                    case TransactionState.Timeout:
-                    case TransactionState.SystemError:
-                    case TransactionState.RoutingFailed:
+                    case TransactionState.Failed:
                         failed++;
                         break;
-                    case TransactionState.ReversalPending:
-                    case TransactionState.ReversalRequired:
+                    case TransactionState.Reversing:
                         reversals++;
                         break;
                 }
@@ -365,10 +278,10 @@ namespace router
             return new TransactionStateMachineStats
             {
                 ActiveTransactions = _transactions.Count,
-                PendingCount = pending,
+                RoutingCount = routing,
                 CompletedCount = completed,
                 FailedCount = failed,
-                PendingReversalsCount = reversals
+                ReversingCount = reversals
             };
         }
 
@@ -384,9 +297,9 @@ namespace router
     public class TransactionStateMachineStats
     {
         public int ActiveTransactions { get; set; }
-        public int PendingCount { get; set; }
+        public int RoutingCount { get; set; }
         public int CompletedCount { get; set; }
         public int FailedCount { get; set; }
-        public int PendingReversalsCount { get; set; }
+        public int ReversingCount { get; set; }
     }
 }
