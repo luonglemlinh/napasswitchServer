@@ -6,8 +6,8 @@
       <BankName>Techcombank</BankName>
       <IssuerCode>TCB</IssuerCode>
       <IssuerName>Techcombank</IssuerName>
-      <Host>10.145.54.122</Host>
-      <Port>7001</Port>
+      <Host></Host>
+      <Port></Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>889988</Bin>
@@ -19,8 +19,8 @@
       <BankName>MB Bank</BankName>
       <IssuerCode>MB</IssuerCode>
       <IssuerName>MB Bank</IssuerName>
-      <Host>10.145.54.122</Host>
-      <Port>7002</Port>
+      <Host></Host>
+      <Port></Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>970422</Bin>
@@ -31,8 +31,8 @@
       <BankName>BIDV</BankName>
       <IssuerCode>BIDV</IssuerCode>
       <IssuerName>BIDV</IssuerName>
-      <Host>10.145.54.122</Host>
-      <Port>7003</Port>
+      <Host></Host>
+      <Port></Port>
       <Timeout>30000</Timeout>
       <Bins>
         <!-- 970418 removed - now routes to default NAPAS TS -->
@@ -43,8 +43,8 @@
       <BankName>Vietcombank</BankName>
       <IssuerCode>VCB</IssuerCode>
       <IssuerName>Vietcombank</IssuerName>
-      <Host>10.145.54.122</Host>
-      <Port>7004</Port>
+      <Host></Host>
+      <Port></Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>686868</Bin>

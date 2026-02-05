@@ -232,85 +232,34 @@ public class IsoParser
 
     private string ExtractVariableField(byte[] data, LengthEncoding encoding, ref int offset)
     {
-            int asciiLenDigits = encoding switch
-            {
-                LengthEncoding.LLVAR => 2,
-                LengthEncoding.LLLVAR => 3,
-                _ => throw new InvalidOperationException($"Unknown encoding: {encoding}")
-            };
+        int digits = encoding switch
+        {
+            LengthEncoding.LLVAR => 2,
+            LengthEncoding.LLLVAR => 3,
+            _ => throw new InvalidOperationException($"Unknown encoding: {encoding}")
+        };
 
-            int fieldLength;
+        if (offset + digits > data.Length)
+            throw new ArgumentException($"Insufficient data for variable field length prefix at offset {offset}");
 
-            // First try ASCII length prefix
-            if (TryParseAsciiLength(data, offset, asciiLenDigits, out fieldLength))
-            {
-                offset += asciiLenDigits;
-            }
-            else if (TryParsePackedBcdLength(data, offset, asciiLenDigits, out fieldLength, out int bytesConsumed))
-            {
-                offset += bytesConsumed;
-            }
-            else
-            {
-                string lengthStr = System.Text.Encoding.ASCII.GetString(data, offset, Math.Min(asciiLenDigits, data.Length - offset));
-                throw new InvalidOperationException($"Invalid length prefix: {lengthStr}");
-            }
+        int fieldLength = 0;
+        for (int i = 0; i < digits; i++)
+        {
+            byte b = data[offset + i];
+            if (b < '0' || b > '9')
+                throw new InvalidOperationException($"Invalid ASCII length digit '{ (char)b }' at offset {offset + i}");
+            fieldLength = fieldLength * 10 + (b - '0');
+        }
 
-        string value = System.Text.Encoding.ASCII.GetString(data, offset, fieldLength);
+        offset += digits;
+
+        if (offset + fieldLength > data.Length)
+             throw new ArgumentException($"Insufficient data for variable field content. Expected {fieldLength} bytes at offset {offset}");
+
+        string value = Encoding.ASCII.GetString(data, offset, fieldLength);
         offset += fieldLength;
         return value;
     }
-
-        private static bool TryParseAsciiLength(byte[] data, int offset, int digits, out int value)
-        {
-            value = 0;
-            if (offset + digits > data.Length) return false;
-            for (int i = 0; i < digits; i++)
-            {
-                byte b = data[offset + i];
-                if (b < '0' || b > '9') return false;
-                value = value * 10 + (b - '0');
-            }
-            return true;
-        }
-
-        private static bool TryParsePackedBcdLength(byte[] data, int offset, int digits, out int value, out int bytesConsumed)
-        {
-            value = 0;
-            bytesConsumed = 0;
-
-            // Packed BCD: each nibble is a digit. For LLVAR (2 digits) -> 1 byte. For LLLVAR (3 digits) -> 2 bytes (use first 3 nibbles).
-            int requiredNibbles = digits;
-            int requiredBytes = (requiredNibbles + 1) / 2;
-
-            if (offset + requiredBytes > data.Length) return false;
-
-            int nibblesRead = 0;
-            for (int i = 0; i < requiredBytes; i++)
-            {
-                byte b = data[offset + i];
-                byte high = (byte)((b >> 4) & 0x0F);
-                byte low = (byte)(b & 0x0F);
-
-                if (nibblesRead < requiredNibbles)
-                {
-                    if (high > 9) return false;
-                    value = value * 10 + high;
-                    nibblesRead++;
-                }
-                if (nibblesRead < requiredNibbles)
-                {
-                    if (low > 9) return false;
-                    value = value * 10 + low;
-                    nibblesRead++;
-                }
-            }
-
-            if (nibblesRead != requiredNibbles) return false;
-
-            bytesConsumed = requiredBytes;
-            return true;
-        }
 
     private static byte[] HexStringToBytes(string hex)
     {
