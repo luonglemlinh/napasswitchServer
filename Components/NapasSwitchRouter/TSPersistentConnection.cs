@@ -60,7 +60,7 @@ namespace router
 
             try
             {
-                Console.WriteLine($"[TS-CONN] Connecting to {_tsConfig.IssuerName} at {_tsConfig.Host}:{_tsConfig.Port}...");
+                MessageLogger.LogConnectionEvent("TS-CONN", $"Connecting to {_tsConfig.IssuerName} at {_tsConfig.Host}:{_tsConfig.Port}...");
 
                 _client = new TcpClient();
                 await _client.ConnectAsync(_tsConfig.Host, _tsConfig.Port);
@@ -76,7 +76,7 @@ namespace router
                 _connectionCts = new CancellationTokenSource();
                 _isConnected = true;
 
-                Console.WriteLine($"[TS-CONN] TCP connection established to {_tsConfig.Host}:{_tsConfig.Port}");
+                MessageLogger.LogConnectionEvent("TS-CONN", $"TCP connection established to {_tsConfig.Host}:{_tsConfig.Port}");
 
                 // Start background receive loop
                 _ = ReceiveLoopAsync(_connectionCts.Token);
@@ -86,7 +86,7 @@ namespace router
                 
                 if (signOnSuccess)
                 {
-                    Console.WriteLine($"[TS-CONN] Successfully connected and signed on to {_tsConfig.IssuerName}");
+                    MessageLogger.LogConnectionEvent("TS-CONN", $"Successfully connected and signed on to {_tsConfig.IssuerName}");
                     return true;
                 }
                 else
@@ -105,11 +105,63 @@ namespace router
         }
 
         /// <summary>
+        /// Attach an existing TCP client (Passive Mode)
+        /// </summary>
+        public async Task<bool> AttachClientAsync(TcpClient client)
+        {
+            if (IsConnected) Disconnect();
+
+            try
+            {
+                _client = client;
+                _stream = _client.GetStream();
+                _stream.WriteTimeout = _tsConfig.Timeout;
+                
+                // Configure Keep-Alive
+                ConfigureTcpKeepAlive(_client.Client);
+
+                _connectionCts = new CancellationTokenSource();
+                _isConnected = true;
+                
+                string remoteEp = _client.Client.RemoteEndPoint?.ToString() ?? "Unknown";
+                MessageLogger.LogConnectionEvent("TS-PASSIVE", $"Accepted connection from {remoteEp} for {_tsConfig.IssuerName}");
+
+                // Start background receive loop
+                _ = ReceiveLoopAsync(_connectionCts.Token);
+
+                // Send sign-on message (0800) immediately
+                // In Passive mode, WE are the Server, but WE still send 0800 to Sign-on to the Issuer?
+                // Request says: "Start up -> Listen -> ISS connects -> Send 0800"
+                // So yes, we initiate the 0800.
+                bool signOnSuccess = await SendSignOnAsync();
+                
+                if (signOnSuccess)
+                {
+                    MessageLogger.LogConnectionEvent("TS-PASSIVE", $"Successfully signed on to {_tsConfig.IssuerName}");
+                    StartHeartbeat(); // Optional: Start heartbeat if we want to keep it alive from our side
+                    return true;
+                }
+                else
+                {
+                    Console.WriteLine($"[TS-PASSIVE] Sign-on failed, closing connection");
+                    Disconnect();
+                    return false;
+                }
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"[TS-PASSIVE] Failed to attach client: {ex.Message}");
+                Disconnect();
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Continuous background loop to read incoming messages
         /// </summary>
         private async Task ReceiveLoopAsync(CancellationToken token)
         {
-            Console.WriteLine("[TS-RECV] Started background receive loop");
+            MessageLogger.LogConnectionEvent("TS-RECV", "Started background receive loop");
             var buffer = new byte[8192];
 
             try
@@ -119,7 +171,11 @@ namespace router
                     // 1. Read 4-byte Length Header
                     byte[] lenBytes = new byte[4];
                     int bytesRead = await ReadExactAsync(_stream, lenBytes, 0, 4, token);
-                    if (bytesRead == 0) break; // Socket closed
+                    if (bytesRead == 0) 
+                    {
+                        Console.WriteLine("[TS-RECV] Remote side closed connection (0 bytes read)");
+                        break; 
+                    }
 
                     string lenStr = System.Text.Encoding.ASCII.GetString(lenBytes);
                     if (!int.TryParse(lenStr, out int msgLen))
@@ -131,7 +187,11 @@ namespace router
                     // 2. Read Payload
                     byte[] payload = new byte[msgLen];
                     bytesRead = await ReadExactAsync(_stream, payload, 0, msgLen, token);
-                    if (bytesRead != msgLen) break;
+                    if (bytesRead != msgLen) 
+                    {
+                        Console.WriteLine($"[TS-RECV] Connection closed mid-message (expected {msgLen}, got {bytesRead})");
+                        break;
+                    }
 
                     // 3. Process Message
                     ProcessIncomingPayload(payload);
@@ -144,7 +204,7 @@ namespace router
             }
             finally
             {
-                Console.WriteLine("[TS-RECV] Receive loop stopped");
+                // Console.WriteLine("[TS-RECV] Receive loop stopped"); // Reduced noise
                 if (!token.IsCancellationRequested) Disconnect();
             }
         }
@@ -173,7 +233,7 @@ namespace router
                   // Log to file instead of console log spam
                   if (!msg.MessageType.StartsWith("08"))
                   {
-                      MessageLogger.LogMessage("TS-PERSISTENT", "TS-RECV", msg);
+                      MessageLogger.LogMessage("TS-PERSISTENT", "ISS received", msg);
                   }
 
                   if (rc == "30")
@@ -250,14 +310,14 @@ namespace router
         private async Task<bool> SendSignOnAsync()
         {
             var signOnMsg = BuildNetworkMessage("001"); // 001 = Sign-on
-            Console.WriteLine($"[TS-CONN] Sending sign-on (0800)...");
+            MessageLogger.LogConnectionEvent("TS-CONN", "Sending sign-on (0800)...");
 
             var response = await SendRequestAsync(signOnMsg, "SIGN-ON");
             
             if (response != null)
             {
                 string rc = response.GetResponseCode() ?? "96";
-                Console.WriteLine($"[TS-CONN] Sign-on response: RC={rc}");
+                MessageLogger.LogConnectionEvent("TS-CONN", $"Sign-on response: RC={rc}");
                 return rc == "00";
             }
             return false;
@@ -267,7 +327,7 @@ namespace router
         {
             _heartbeatTimer?.Dispose();
             _heartbeatTimer = new Timer(async _ => await SendHeartbeatAsync(), null, _heartbeatIntervalMs, _heartbeatIntervalMs);
-            Console.WriteLine($"[TS-CONN] Heartbeat started (every {_heartbeatIntervalMs / 1000}s)");
+            MessageLogger.LogConnectionEvent("TS-CONN", $"Heartbeat started (every {_heartbeatIntervalMs / 1000}s)");
         }
 
         private async Task SendHeartbeatAsync()
@@ -312,17 +372,27 @@ namespace router
             // - Length field: Zero-padded ASCII (e.g., "06" for 6 digits)
             // Example: Acquirer ID "970418" → Wire format "06970418"
             //          where "06" indicates 6 digits follow, then "970418" is the actual ID
-            string acquirerId = _tsConfig.IssuerCode ?? "970488";
-            
-            // Validate acquirer ID format (should be 6-11 numeric digits per NAPAS)
-            if (string.IsNullOrEmpty(acquirerId) || acquirerId.Length < 6 || acquirerId.Length > 11)
-            {
-                Console.WriteLine($"[TS-WARN] Invalid Acquirer ID '{acquirerId}', using default '970488'");
-                acquirerId = "970418";
-            }
+            // DE32: Acquiring Institution Identification Code
+            // Use IssuerCode if numeric, otherwise try first BIN, else default.
+            string acquirerId = _tsConfig.IssuerCode;
 
-            if (acquirerId == "970400") acquirerId = "970418";
+            if (string.IsNullOrEmpty(acquirerId) || !acquirerId.All(char.IsDigit))
+            {
+                // Try to use the first configured BIN for this bank
+                var firstBin = _tsConfig.AllBins.FirstOrDefault();
+                if (!string.IsNullOrEmpty(firstBin))
+                {
+                    acquirerId = firstBin;
+                }
+                else
+                {
+                    acquirerId = "970418"; // Default Default
+                }
+            }
             
+            // Final validation length (msg must be 6-11 digits)
+            if (acquirerId.Length < 6 || acquirerId.Length > 11) acquirerId = "970418";
+
             message.SetField(32, acquirerId);
 
             message.SetField(70, networkCode);
@@ -334,7 +404,7 @@ namespace router
             if (!IsConnected) await ConnectAsync();
             
             // Log message before forwarding to TS
-            MessageLogger.LogMessage(sessionId, "TS-FORWARD", request);
+            MessageLogger.LogMessage(sessionId, "ISS forward", request);
             Console.WriteLine($"[{sessionId}] [TS-FWD] {request.MessageType} | TRN: {request.GetTRN() ?? "N/A"}");
             
             try
@@ -462,7 +532,7 @@ namespace router
 
                 socket.IOControl(IOControlCode.KeepAliveValues, inOptionValues, null);
                 
-                Console.WriteLine("[TS-CONN] TCP Keep-Alive configured: Idle=60s, Interval=1s");
+                MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured: Idle=60s, Interval=1s");
             }
             catch (Exception ex)
             {

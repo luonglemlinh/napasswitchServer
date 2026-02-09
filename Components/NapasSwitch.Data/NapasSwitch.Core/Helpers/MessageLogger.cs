@@ -1,4 +1,4 @@
-using System;
+    using System;
 using System.IO;
 using System.Linq;
 using core.Models;
@@ -12,15 +12,14 @@ namespace core.Helpers
     /// </summary>
     public static class MessageLogger
     {
-        private static readonly string LogDir = @"c:\Users\admin\source\repos\napasswitchServer\Logs";
+        private static readonly string LogDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
         private static readonly string LogFilePath = Path.Combine(LogDir, "message_log.txt");
+        private static readonly string NetworkLogFilePath = Path.Combine(LogDir, "network_message.txt");
+        private static readonly string ConnectionLogFilePath = Path.Combine(LogDir, "h2h_connections.txt");
         private static readonly object _lock = new object();
-        private static bool _initialized = false;
 
         private static void EnsureInitialized()
         {
-            if (_initialized) return;
-
             try
             {
                 if (!Directory.Exists(LogDir))
@@ -28,18 +27,61 @@ namespace core.Helpers
                     Directory.CreateDirectory(LogDir);
                 }
 
-                if (File.Exists(LogFilePath))
-                {
-                    // Basic rotation: if > 10MB, rename and start new
-                    var info = new FileInfo(LogFilePath);
-                    if (info.Length > 10 * 1024 * 1024)
-                    {
-                        File.Move(LogFilePath, Path.Combine(LogDir, $"message_log_{DateTime.Now:yyyyMMdd_HHmmss}.txt"));
-                    }
-                }
-                _initialized = true;
+                RotateFile(LogFilePath);
+                RotateFile(NetworkLogFilePath);
+                RotateFile(ConnectionLogFilePath);
             }
             catch { /* Ignore logging errors to prevent crash */ }
+        }
+
+        public static void LogConnectionEvent(string source, string message)
+        {
+            try
+            {
+                lock (_lock)
+                {
+                    EnsureInitialized();
+                    using (var writer = new StreamWriter(ConnectionLogFilePath, append: true))
+                    {
+                        string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                        writer.WriteLine($"{timestamp} [{source}] {message}");
+                    }
+                }
+            }
+            catch { /* Ignore */ }
+        }
+
+        private static void RotateFile(string path)
+        {
+            if (File.Exists(path))
+            {
+                var info = new FileInfo(path);
+                if (info.Length > 10 * 1024 * 1024)
+                {
+                    string fileName = Path.GetFileNameWithoutExtension(path);
+                    string ext = Path.GetExtension(path);
+                    string newPath = Path.Combine(LogDir, $"{fileName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
+                    File.Move(path, newPath);
+                }
+            }
+        }
+
+        public static void LogRaw(string sessionId, string hex, string ascii)
+        {
+            try
+            {
+                lock (_lock)
+                {
+                    EnsureInitialized();
+                    using (var writer = new StreamWriter(LogFilePath, append: true))
+                    {
+                        string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                        writer.WriteLine($"{timestamp} [{sessionId}] Raw HEX: {hex}");
+                        writer.WriteLine($"{timestamp} [{sessionId}] Raw ASCII: {ascii}");
+                    }
+                }
+            }
+            catch { }
         }
 
         public static void LogMessage(string sessionId, string direction, IsoMessage message)
@@ -49,76 +91,42 @@ namespace core.Helpers
                 lock (_lock)
                 {
                     EnsureInitialized();
-                    using (var writer = new StreamWriter(LogFilePath, append: true))
+                    
+                    string targetPath = message.MessageType.StartsWith("08") ? NetworkLogFilePath : LogFilePath;
+
+                    using (var writer = new StreamWriter(targetPath, append: true))
                     {
                         string trn = message.GetTRN() ?? "N/A";
                         string mti = message.MessageType;
                         string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
 
-                        writer.WriteLine();
-                        writer.WriteLine("┌────────────────────────────────────────────────────────────────────────────┐");
-                        writer.WriteLine($"│ {direction,-12} | MTI: {mti} | TRN: {trn,-16} | {timestamp} │");
-                        writer.WriteLine("└────────────────────────────────────────────────────────────────────────────┘");
-                        writer.WriteLine($" Session ID: {sessionId}");
-                        if (!string.IsNullOrEmpty(message.Header)) writer.WriteLine($" Header:     {message.Header}");
+                        writer.WriteLine($"{timestamp} <{trn}> [------------] {direction}:");
+                        writer.WriteLine($"\tType: {mti}");
 
-                        // 1. Transaction Identifiers
-                        writer.WriteLine("\n === [ TRANSACTION IDENTIFIERS ] ===");
-                        LogField(writer, message, 11, "STAN");
-                        LogField(writer, message, 37, "RRN");
-                        LogField(writer, message, 63, "TRN");
-                        LogField(writer, message, 38, "Auth ID");
-                        LogField(writer, message, 7,  "Transmission Time");
-
-                        // 2. Card Data
-                        writer.WriteLine("\n === [ CARD DATA ] ===");
-                        LogField(writer, message, 2,  "PAN", SecureDataHandler.MaskPAN(message.GetField(2)));
-                        LogField(writer, message, 14, "Expiration");
-                        LogField(writer, message, 22, "Entry Mode");
-                        if (message.HasField(35)) writer.WriteLine("  035 (Track 2):        [REDACTED - SECURITY POLICY]");
-
-                        // 3. Amounts & Currency
-                        writer.WriteLine("\n === [ AMOUNTS ] ===");
-                        LogField(writer, message, 4,  "Amount", FormatAmount(message.GetField(4)));
-                        LogField(writer, message, 49, "Currency");
-                        LogField(writer, message, 54, "Additional Amounts");
-
-                        // 4. Routing
-                        writer.WriteLine("\n === [ ROUTING ] ===");
-                        LogField(writer, message, 32, "Acquirer ID");
-                        LogField(writer, message, 33, "Forwarding ID");
-                        LogField(writer, message, 100, "Receiving ID");
-
-                        // 5. Merchant & Terminal
-                        writer.WriteLine("\n === [ MERCHANT / TERMINAL ] ===");
-                        LogField(writer, message, 41, "Terminal ID");
-                        LogField(writer, message, 42, "Merchant ID");
-                        LogField(writer, message, 43, "Merchant Name/Loc");
-                        LogField(writer, message, 18, "Merchant Type (MCC)");
-
-                        // 6. Response Data (only for responses)
-                        if (mti.EndsWith("10") || mti.EndsWith("30") || mti.EndsWith("10") || mti.EndsWith("21") || mti.EndsWith("30"))
+                        if (!string.IsNullOrEmpty(message.Header))
                         {
-                            writer.WriteLine("\n === [ RESPONSE DATA ] ===");
-                            LogField(writer, message, 39, "Response Code");
-                            LogField(writer, message, 102, "Account ID 1");
-                            LogField(writer, message, 103, "Account ID 2");
+                            writer.WriteLine($"\t000:{message.Header}");
                         }
 
-                        // 7. Other Fields
-                        var loggedFields = new int[] { 2, 4, 7, 11, 14, 18, 22, 32, 33, 35, 37, 38, 39, 41, 42, 43, 49, 54, 63, 100, 102, 103 };
-                        var otherFields = message.Fields.Keys.Where(k => !loggedFields.Contains(k)).OrderBy(k => k).ToList();
-                        
-                        if (otherFields.Any())
+                        if (!string.IsNullOrEmpty(message.PrimaryBitmap))
                         {
-                            writer.WriteLine("\n === [ OTHER FIELDS ] ===");
-                            foreach (var fNum in otherFields)
-                            {
-                                LogField(writer, message, fNum, IsoMessage.GetFieldDescription(fNum));
-                            }
+                            string bitmap = message.PrimaryBitmap;
+                            if (!string.IsNullOrEmpty(message.SecondaryBitmap)) bitmap += message.SecondaryBitmap;
+                            writer.WriteLine($"\t001:{bitmap}");
                         }
 
-                        writer.WriteLine("\n" + new string('-', 80));
+                        foreach (var field in message.Fields.OrderBy(f => f.Key))
+                        {
+                            if (field.Key == 0 || field.Key == 1) continue; // Already handled
+
+                            int fNum = field.Key;
+                            string value = field.Value;
+                            
+                            writer.WriteLine($"\t{fNum:D3}:{value}");
+
+                            // Subfield logging
+                            LogSubfields(writer, fNum, value);
+                        }
                     }
                 }
             }
@@ -128,12 +136,33 @@ namespace core.Helpers
             }
         }
 
-        private static void LogField(StreamWriter writer, IsoMessage message, int fNum, string label, string? overrideValue = null)
+        private static void LogSubfields(StreamWriter writer, int fNum, string value)
         {
-            if (message.HasField(fNum))
+            if (string.IsNullOrEmpty(value)) return;
+
+            switch (fNum)
             {
-                string value = overrideValue ?? message.GetField(fNum)!;
-                writer.WriteLine($"  {fNum:D3} ({label,-18}): {value}");
+                case 2: // PAN
+                    if (value.Length >= 2)
+                        writer.WriteLine($"\t 2.01:{value.Substring(0, 2)}");
+                    break;
+
+                case 3: // Processing Code (6 digits: 00 00 00)
+                    if (value.Length >= 2) writer.WriteLine($"\t 3.01:{value.Substring(0, 2)}");
+                    if (value.Length >= 4) writer.WriteLine($"\t 3.02:{value.Substring(2, 2)}");
+                    if (value.Length >= 6) writer.WriteLine($"\t 3.03:{value.Substring(4, 2)}");
+                    break;
+
+                case 22: // POS Entry Mode (3 digits: 07 0)
+                    if (value.Length >= 2) writer.WriteLine($"\t 22.01:{value.Substring(0, 2)}");
+                    if (value.Length >= 3) writer.WriteLine($"\t 22.02:{value.Substring(2, 1)}");
+                    break;
+
+                case 43: // Merchant Name/Loc (40 chars: 22 / 15 / 3)
+                    if (value.Length >= 22) writer.WriteLine($"\t 43.01:{value.Substring(0, 22)}");
+                    if (value.Length >= 37) writer.WriteLine($"\t 43.02:{value.Substring(22, 15)}");
+                    if (value.Length >= 40) writer.WriteLine($"\t 43.03:{value.Substring(37, 3)}");
+                    break;
             }
         }
 

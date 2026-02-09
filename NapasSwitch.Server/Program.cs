@@ -80,8 +80,8 @@ namespace server
                 }
 
                 // Step 4: Create and start the server
-                int port = 8583;
-                var server = new TcpSwitchServer(port, dbConnectionString, enableLogging);
+                int[] ports = { 1111, 2222, 3333, 1177 };
+                var server = new TcpSwitchServer(ports, dbConnectionString, enableLogging);
 
                 Console.WriteLine("\n[READY] Press ENTER to start the server, or 'Q' to quit...");
                 var startKey = Console.ReadKey();

@@ -26,10 +26,26 @@
       <MaxConnections>10</MaxConnections>
     </Acquirer>
     <Acquirer>
-      <AcquirerCode>970418</AcquirerCode>
+      <AcquirerCode>970488</AcquirerCode>
       <AcquirerID>BIDV</AcquirerID>
       <Host>10.0.2.103</Host>
       <Port>8004</Port>
+      <Timeout>30000</Timeout>
+      <MaxConnections>10</MaxConnections>
+    </Acquirer>
+    <Acquirer>
+      <AcquirerCode>970416</AcquirerCode>
+      <AcquirerID>ACB</AcquirerID>
+      <Host>10.0.2.104</Host>
+      <Port>8005</Port>
+      <Timeout>30000</Timeout>
+      <MaxConnections>10</MaxConnections>
+    </Acquirer>
+    <Acquirer>
+      <AcquirerCode>970430</AcquirerCode>
+      <AcquirerID>PGB</AcquirerID>  
+      <Host>10.0.2.105</Host>
+      <Port>8006</Port>
       <Timeout>30000</Timeout>
       <MaxConnections>10</MaxConnections>
     </Acquirer>

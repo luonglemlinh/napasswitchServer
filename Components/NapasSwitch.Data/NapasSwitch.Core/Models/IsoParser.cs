@@ -41,8 +41,7 @@ public class IsoParser
         int offset = 0;
         string header = "";
 
-        // Detect Header (F00)
-        // Improvise: Scan for the 4-digit MTI pattern. Anything before it is Header.
+        // Detect Header (F00)  
         // MTIs usually start with '0' (0200, 0400, 0800, etc.)
         for (int i = 0; i <= Math.Min(messageBytes.Length - 4, 32); i++)
         {
