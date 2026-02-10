@@ -14,16 +14,11 @@ namespace data
     {
         private readonly string _connectionString;
         private readonly bool _enableLogging;
-        private readonly string _fallbackPath;
 
         public TransactionLogger(string connectionString, bool enableLogging = true)
         {
             _connectionString = connectionString;
             _enableLogging = enableLogging;
-            
-            var directory = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "FallbackLogs");
-            if (!Directory.Exists(directory)) Directory.CreateDirectory(directory);
-            _fallbackPath = Path.Combine(directory, $"transactions_{DateTime.Now:yyyyMMdd}.log");
         }
 
         public async Task LogTransactionAsync(
@@ -41,8 +36,8 @@ namespace data
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DB-LOG-ERROR] Connection failed, falling back to file: {ex.Message}");
-                LogToFile(request, response, sessionId, processingTimeMs, direction);
+                Console.WriteLine($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
+                core.Helpers.MessageLogger.LogMessage(sessionId, direction, response ?? request);
             }
         }
 
@@ -100,8 +95,8 @@ namespace data
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DB-LOG-ERROR] Connection failed, falling back to file: {ex.Message}");
-                LogToFile(request, null, sessionId, 0, direction);
+                Console.WriteLine($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
+                core.Helpers.MessageLogger.LogMessage(sessionId, direction, request);
             }
         }
 
@@ -139,19 +134,6 @@ namespace data
 
                     await command.ExecuteNonQueryAsync();
                 }
-            }
-        }
-
-        private void LogToFile(IsoMessage request, IsoMessage? response, string sessionId, int timeMs, string direction)
-        {
-            try 
-            {
-                string line = $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}|{sessionId}|{request.MessageType}|{request.GetPAN()}|{request.GetAmount()}|{response?.GetResponseCode() ?? "N/A"}|{timeMs}ms|{direction}";
-                File.AppendAllLines(_fallbackPath, new[] { line });
-            }
-            catch (Exception ex) 
-            {
-                Console.WriteLine($"[CRITICAL] Fallback logging failed: {ex.Message}");
             }
         }
 

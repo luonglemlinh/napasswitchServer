@@ -89,7 +89,7 @@ namespace router
                 lengthHeader[1] = (byte)(requestBytes.Length & 0xFF);
 
                 // Log request before forwarding to ISS
-                MessageLogger.LogMessage(sessionId, "ISS-FORWARD", request);
+                MessageLogger.LogMessage(sessionId, "ISS forward", request);
                 // Send to ISS
                 connection.Stream.Write(lengthHeader, 0, 2);
                 connection.Stream.Write(requestBytes, 0, requestBytes.Length);
@@ -235,7 +235,7 @@ namespace router
                 string rc = response.GetResponseCode() ?? "96";
 
                 // Log response received from ISS
-                MessageLogger.LogMessage(sessionId, "ISS-RECV", response);
+                MessageLogger.LogMessage(sessionId, "ISS received", response);
                 string respRc = response.GetResponseCode() ?? "00";
                 string respTrn = response.GetTRN() ?? request.GetTRN() ?? "N/A";
                 Console.WriteLine($"[{sessionId}] [ISS-RECV] {response.MessageType} | TRN: {respTrn} | RC: {respRc}");

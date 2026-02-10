@@ -26,7 +26,7 @@ BEGIN
         Id BIGINT PRIMARY KEY IDENTITY(1,1),
         SessionId VARCHAR(255) NOT NULL,
         MessageType VARCHAR(255) NOT NULL,
-        PAN VARCHAR(50) NULL,
+        PAN VARCHAR(255) NULL,
         ProcessingCode VARCHAR(50) NULL,
         Amount DECIMAL(18,2) NULL,
         STAN VARCHAR(50) NULL,

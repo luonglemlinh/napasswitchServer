@@ -41,10 +41,25 @@ namespace router
         /// </summary>
         public async Task ConnectAllAsync()
         {
-            Console.WriteLine($"[TS-MGR] Connecting {_channelCount} channels to {TSName}...");
+            core.Helpers.MessageLogger.LogConnectionEvent("TS-MGR", $"Connecting {_channelCount} channels to {TSName}...");
             var tasks = _channels.Select(c => c.ConnectAsync());
             await Task.WhenAll(tasks);
-            Console.WriteLine($"[TS-MGR] Connected {ConnectedCount}/{_channelCount} channels");
+            core.Helpers.MessageLogger.LogConnectionEvent("TS-MGR", $"Connected {ConnectedCount}/{_channelCount} channels");
+        }
+
+        /// <summary>
+        /// Accept an incoming connection (Passive Mode)
+        /// </summary>
+        public async Task<bool> AcceptConnectionAsync(System.Net.Sockets.TcpClient client)
+        {
+            // For passive mode, we typically use the first channel (or find an idle one)
+            // Since we usually have 1 channel for H2H, we just use the first/primary channel.
+            
+            var channel = _channels.FirstOrDefault();
+            if (channel == null) return false;
+
+            core.Helpers.MessageLogger.LogConnectionEvent("TS-MGR", $"Accepting inbound connection for {TSName}...");
+            return await channel.AttachClientAsync(client);
         }
 
         /// <summary>
@@ -76,6 +91,28 @@ namespace router
             return null;
         }
 
+        /// <summary>
+        /// Get the status of each channel for monitoring
+        /// </summary>
+        public List<ChannelStatus> GetChannelStatuses()
+        {
+            var statuses = new List<ChannelStatus>();
+            for (int i = 0; i < _channels.Count; i++)
+            {
+                var ch = _channels[i];
+                statuses.Add(new ChannelStatus
+                {
+                    ChannelIndex = i,
+                    IssuerName = _tsConfig.IssuerName,
+                    IssuerCode = _tsConfig.IssuerCode,
+                    Host = _tsConfig.Host,
+                    Port = _tsConfig.Port,
+                    IsConnected = ch.IsConnected
+                });
+            }
+            return statuses;
+        }
+
         public void DisconnectAll()
         {
             foreach (var channel in _channels)
@@ -95,5 +132,15 @@ namespace router
             }
             _channels.Clear();
         }
+    }
+
+    public class ChannelStatus
+    {
+        public int ChannelIndex { get; set; }
+        public string IssuerName { get; set; } = string.Empty;
+        public string IssuerCode { get; set; } = string.Empty;
+        public string Host { get; set; } = string.Empty;
+        public int Port { get; set; }
+        public bool IsConnected { get; set; }
     }
 }

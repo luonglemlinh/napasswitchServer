@@ -214,6 +214,11 @@ namespace core.Configuration
             return null;
         }
 
+        public IssuerBankConfig? GetIssuerByCode(string issuerCode)
+        {
+            return _binRouting?.Banks.FirstOrDefault(b => b.IssuerCode == issuerCode);
+        }
+
         public AcquirerConfig? GetAcquirerByCode(string acquirerCode)
         {
             return _acquirerMap.ContainsKey(acquirerCode)

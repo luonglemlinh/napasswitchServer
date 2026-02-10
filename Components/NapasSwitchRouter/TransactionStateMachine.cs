@@ -235,6 +235,9 @@ namespace router
                     reversal.SetField(field, context.Request.GetField(field));
             }
 
+            // DE#90: Original Data Elements (42 bytes)
+            reversal.SetField(90, IsoMessage.BuildDE90(context.Request));
+
             // Calculate DE #5 (Settlement Amount) if DE #4 and DE #9 are present
             core.Helpers.SettlementHelper.AddSettlementAmount(reversal);
 
