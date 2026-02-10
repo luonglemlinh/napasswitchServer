@@ -91,6 +91,28 @@ namespace router
             return null;
         }
 
+        /// <summary>
+        /// Get the status of each channel for monitoring
+        /// </summary>
+        public List<ChannelStatus> GetChannelStatuses()
+        {
+            var statuses = new List<ChannelStatus>();
+            for (int i = 0; i < _channels.Count; i++)
+            {
+                var ch = _channels[i];
+                statuses.Add(new ChannelStatus
+                {
+                    ChannelIndex = i,
+                    IssuerName = _tsConfig.IssuerName,
+                    IssuerCode = _tsConfig.IssuerCode,
+                    Host = _tsConfig.Host,
+                    Port = _tsConfig.Port,
+                    IsConnected = ch.IsConnected
+                });
+            }
+            return statuses;
+        }
+
         public void DisconnectAll()
         {
             foreach (var channel in _channels)
@@ -110,5 +132,15 @@ namespace router
             }
             _channels.Clear();
         }
+    }
+
+    public class ChannelStatus
+    {
+        public int ChannelIndex { get; set; }
+        public string IssuerName { get; set; } = string.Empty;
+        public string IssuerCode { get; set; } = string.Empty;
+        public string Host { get; set; } = string.Empty;
+        public int Port { get; set; }
+        public bool IsConnected { get; set; }
     }
 }

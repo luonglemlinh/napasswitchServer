@@ -75,18 +75,6 @@
         <Bin>970436</Bin>
       </Bins>
     </Bank>
-    <Bank>
-      <BankCode>TS</BankCode>
-      <BankName>NAPAS TS</BankName>
-      <IssuerCode>970488</IssuerCode>
-      <IssuerName>NAPAS Transaction Switch</IssuerName>
-      <Host>10.145.48.70</Host>
-      <Port>8386</Port>
-      <Timeout>30000</Timeout>
-      <IsDefault>true</IsDefault>
-      <Bins>
-      </Bins>
-    </Bank>
   </Banks>
   <HandleClient>
     <Checks>

@@ -116,6 +116,38 @@ namespace core.Models
         public string? GetMerchantID() => GetField(42);
         public void SetMerchantID(string value) => SetField(42, value);
 
+        /// <summary>
+        /// Build DE#90 (Original Data Elements) from an original request message.
+        /// Fixed 42-byte numeric: MTI(4) + STAN(6) + TransDateTime(10) + AcqID(11) + FwdID(11)
+        /// </summary>
+        public static string BuildDE90(IsoMessage originalRequest)
+        {
+            return BuildDE90(
+                originalRequest.MessageType,
+                originalRequest.GetField(11),
+                originalRequest.GetField(7),
+                originalRequest.GetField(32),
+                originalRequest.GetField(33));
+        }
+
+        /// <summary>
+        /// Build DE#90 (Original Data Elements) from individual field values.
+        /// Fixed 42-byte numeric: MTI(4) + STAN(6) + TransDateTime(10) + AcqID(11) + FwdID(11)
+        /// Sub-element 5 (forwarding institution) is filled with '0' when not provided.
+        /// </summary>
+        public static string BuildDE90(string? originalMti, string? originalStan, string? originalDateTime, string? originalAcqId, string? originalFwdId)
+        {
+            string mti = (originalMti ?? "0200").PadRight(4, '0')[..4];
+            string stan = (originalStan ?? "000000").PadLeft(6, '0')[..6];
+            string dateTime = (originalDateTime ?? "0000000000").PadLeft(10, '0')[..10];
+            string acqId = (originalAcqId ?? "").PadRight(11, '0')[..11];
+            string fwdId = string.IsNullOrWhiteSpace(originalFwdId)
+                ? "00000000000"
+                : originalFwdId.PadRight(11, '0')[..11];
+
+            return $"{mti}{stan}{dateTime}{acqId}{fwdId}";
+        }
+
         // ========== Generic Field Access ==========
 
         

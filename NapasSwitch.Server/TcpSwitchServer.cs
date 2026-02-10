@@ -532,7 +532,7 @@ public class TcpSwitchServer : IDisposable
                 {
                     "0200" => await HandleAuthorizationRequestAsync(request, sessionId, txnContext),
                     "0400" => await HandleReversalRequestAsync(request, sessionId, txnContext),
-                    "0420" => HandleReversalAdviceAsync(request, sessionId, txnContext),
+                    "0420" => await HandleReversalAdviceAsync(request, sessionId, txnContext),
                     "0800" => HandleEchoRequest(request, sessionId, txnContext),
                     _ => CreateErrorResponse(request, "12")
                 };
@@ -560,7 +560,10 @@ public class TcpSwitchServer : IDisposable
 
                 if (_transactionLogger != null) _ = _transactionLogger.LogTransactionAsync(request, response, sessionId, timeMs, "COMPLETE");
 
-                Console.WriteLine($" [{sessionId}] DONE | {request.MessageType}->{response.MessageType} | TRN: {response.GetTRN() ?? "N/A"} | RC: {response.GetField(39) ?? "96"} | {timeMs}ms");
+                if (request.MessageType != "0800" && response.MessageType != "0810")
+                {
+                    Console.WriteLine($" [{sessionId}] DONE | {request.MessageType}->{response.MessageType} | TRN: {response.GetTRN() ?? "N/A"} | RC: {response.GetField(39) ?? "96"} | {timeMs}ms");
+                }
                 return _parser.Build(response);   
             }
             catch (Exception ex)
@@ -697,7 +700,7 @@ public class TcpSwitchServer : IDisposable
         
         /// Handle 0400 - Reversal Request (Void/Cancel)
         
-        private IsoMessage HandleReversalAdviceAsync(IsoMessage request, string sessionId, TransactionContext txnContext)
+        private async Task<IsoMessage> HandleReversalAdviceAsync(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
             Console.WriteLine($" [{sessionId}] Processing reversal advice (0420)");
             
@@ -706,10 +709,18 @@ public class TcpSwitchServer : IDisposable
                 string? trn = request.GetTRN();
                 if (!string.IsNullOrEmpty(trn))
                 {
-                    _ = Task.Run(async () => {
-                        var original = await _pendingStore.GetRequestByTRNAsync(trn);
-                        if (original == null) Console.WriteLine($"  [{sessionId}] [BG-VERIFY] Original NOT found for TRN: {trn}");
-                    });
+                    var original = await _pendingStore.GetRequestByTRNAsync(trn);
+                    if (original != null && !request.HasField(90))
+                    {
+                        request.SetField(90, IsoMessage.BuildDE90(
+                            original.MessageType, original.RequestSTAN, original.RequestDateTime,
+                            original.RequestAcquirerID, null));
+                        Console.WriteLine($"  [{sessionId}] DE#90 built from original: {request.GetField(90)}");
+                    }
+                    else if (original == null)
+                    {
+                        Console.WriteLine($"  [{sessionId}] [BG-VERIFY] Original NOT found for TRN: {trn}");
+                    }
                 }
             }
             
@@ -753,6 +764,15 @@ public class TcpSwitchServer : IDisposable
                         return CreateErrorResponse(request, "25");
                     }
                     Console.WriteLine($"  [{sessionId}] Original transaction found and verified via TRN: {trn}");
+
+                    // Build DE#90 from original if not already present
+                    if (!request.HasField(90))
+                    {
+                        request.SetField(90, IsoMessage.BuildDE90(
+                            original.MessageType, original.RequestSTAN, original.RequestDateTime,
+                            original.RequestAcquirerID, null));
+                        Console.WriteLine($"  [{sessionId}] DE#90 built from original: {request.GetField(90)}");
+                    }
                 }
             }
 
@@ -776,7 +796,7 @@ public class TcpSwitchServer : IDisposable
         // Network Management (0800) - Echo Test
         private IsoMessage HandleEchoRequest(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
-            Console.WriteLine($" [{sessionId}] Processing Echo Request (0800)");
+            // Console.WriteLine($" [{sessionId}] Processing Echo Request (0800)");
             
             var response = CreateSuccessResponse(request);
             response.MessageType = "0810";
@@ -929,6 +949,104 @@ public class TcpSwitchServer : IDisposable
                 try { listener.Stop(); } catch { }
             }
             Console.WriteLine(" Server stopped");
+        }
+
+        
+        /// <summary>
+        /// Print all active connections and their statuses to the console
+        /// </summary>
+        public void PrintActiveConnections()
+        {
+            Console.WriteLine();
+            Console.WriteLine($"--- Connection Status ({DateTime.Now:yyyy-MM-dd HH:mm:ss}) ---");
+            Console.WriteLine();
+
+            // --- Acquirer (Client) Sessions ---
+            Console.WriteLine("  ACQUIRER SESSIONS (POS/ATM)");
+            Console.WriteLine("  -----------------------------------------------");
+
+            var sessions = _activeSessions.Values.ToList();
+            if (sessions.Count == 0)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine("  (none)");
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.WriteLine("  {0,-10} {1,-22} {2,-10} {3,-10} {4,-5}",
+                    "Session", "Endpoint", "Connected", "Last Act.", "Msgs");
+                foreach (var s in sessions)
+                {
+                    string connected = s.ConnectedAt.ToString("HH:mm:ss");
+                    string lastAct = s.LastActivity == default ? "-" : s.LastActivity.ToString("HH:mm:ss");
+                    Console.ForegroundColor = ConsoleColor.Green;
+                    Console.Write("  {0,-10}", s.SessionId);
+                    Console.ResetColor();
+                    Console.WriteLine(" {0,-22} {1,-10} {2,-10} {3,-5}",
+                        Truncate(s.ClientEndpoint, 20), connected, lastAct, s.MessageCount);
+                }
+            }
+
+            Console.WriteLine();
+
+            // --- Issuer H2H Connections ---
+            Console.WriteLine("  ISSUER H2H CONNECTIONS");
+            Console.WriteLine("  -----------------------------------------------");
+
+            if (_issuerConnections.IsEmpty)
+            {
+                Console.ForegroundColor = ConsoleColor.DarkGray;
+                Console.WriteLine("  (none)");
+                Console.ResetColor();
+            }
+            else
+            {
+                Console.WriteLine("  {0,-14} {1,-8} {2,-22} {3,-10} {4,-10}",
+                    "Issuer", "Code", "Host", "Channel", "Status");
+                foreach (var kvp in _issuerConnections)
+                {
+                    var manager = kvp.Value;
+                    var channelStatuses = manager.GetChannelStatuses();
+                    bool isPassive = _portToIssuerCode.Values.Contains(kvp.Key);
+                    string mode = isPassive ? "PSV" : "ACT";
+
+                    foreach (var ch in channelStatuses)
+                    {
+                        string hostPort = $"{ch.Host}:{ch.Port}";
+                        Console.Write("  {0,-14} {1,-8} {2,-22} {3,-10} ",
+                            Truncate(ch.IssuerName, 14), ch.IssuerCode, Truncate(hostPort, 20), $"CH{ch.ChannelIndex}({mode})");
+
+                        if (ch.IsConnected)
+                        {
+                            Console.ForegroundColor = ConsoleColor.Green;
+                            Console.WriteLine("CONNECTED");
+                        }
+                        else
+                        {
+                            Console.ForegroundColor = ConsoleColor.Red;
+                            Console.WriteLine("DISCONNECTED");
+                        }
+                        Console.ResetColor();
+                    }
+                }
+            }
+
+            Console.WriteLine();
+
+            // --- Connection Pool Stats ---
+            Console.WriteLine("  CONNECTION POOL");
+            Console.WriteLine("  -----------------------------------------------");
+            var poolStats = _issuerConnector.GetPoolStats();
+            Console.WriteLine($"  Pooled: {poolStats.TotalPooledConnections}  |  Active: {poolStats.TotalActivedConnections}  |  Pools: {poolStats.PoolCount}");
+
+            Console.WriteLine();
+        }
+
+        private static string Truncate(string value, int maxLength)
+        {
+            if (string.IsNullOrEmpty(value)) return string.Empty;
+            return value.Length <= maxLength ? value : value[..(maxLength - 2)] + "..";
         }
 
         

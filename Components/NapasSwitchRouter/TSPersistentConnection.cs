@@ -227,7 +227,11 @@ namespace router
             {
                 var msg = _parser.Parse(rawData);
                 string rc = msg.GetResponseCode() ?? "96";
-                Console.WriteLine($"[TS-RECV] {msg.MessageType} | TRN: {msg.GetTRN() ?? "N/A"} | RC: {rc}");
+                // Silence 0800/0810 logs unless error
+                if (!msg.MessageType.StartsWith("08") || rc != "00")
+                {
+                    Console.WriteLine($"[TS-RECV] {msg.MessageType} | TRN: {msg.GetTRN() ?? "N/A"} | RC: {rc}");
+                }
                   
                   // Full message dump for debugging (TS to Switch)
                   // Log to file instead of console log spam
@@ -254,11 +258,14 @@ namespace router
             string mti = msg.MessageType;
             string stan = msg.Fields.ContainsKey(11) ? msg.Fields[11] : "000000";
 
-            Console.WriteLine($"[TS-RECV] Received MTI={mti} STAN={stan}");
+            if (!mti.StartsWith("08"))
+            {
+                Console.WriteLine($"[TS-RECV] Received MTI={mti} STAN={stan}");
+            }
 
             if (mti == "0800")
             {
-                Console.WriteLine($"[TS-RECV] Handling Check/Heartbeat Request from TS (AUTO-0810)");
+                // Console.WriteLine($"[TS-RECV] Handling Check/Heartbeat Request from TS (AUTO-0810)");
             }
             else if (IsResponseMTI(mti))
             {
@@ -295,7 +302,7 @@ namespace router
                 // Set Response Code 00 (Success)
                 response.SetField(39, "00");
 
-                Console.WriteLine($"[TS-AUTO] Sending Echo Response (0810) for STAN={response.Fields[11]}");
+                // Console.WriteLine($"[TS-AUTO] Sending Echo Response (0810) for STAN={response.Fields[11]}");
                 await SendMessageInternalAsync(response, "AUTO-ECHO", isResponse: true);
             }
             catch (Exception ex)
@@ -462,7 +469,10 @@ namespace router
 
             if (!isResponse)
             {
-                Console.WriteLine($"[{sessionId}] [TS-SEND] Sending {message.MessageType} (STAN={message.Fields.GetValueOrDefault(11)})");
+                if (!message.MessageType.StartsWith("08"))
+                {
+                    Console.WriteLine($"[{sessionId}] [TS-SEND] Sending {message.MessageType} (STAN={message.Fields.GetValueOrDefault(11)})");
+                }
                 // Note: full HEX dump removed for security; individual fields are logged in ForwardTransactionAsync
             }
 

@@ -99,8 +99,36 @@ namespace server
 
                 Console.WriteLine();
 
-                // Start server (this blocks)
+                // Start server
                 server.Start();
+
+                // Console command loop
+                Console.WriteLine(" Commands: [S] Show connections  [Q] Quit");
+                Console.WriteLine();
+
+                bool running = true;
+                while (running)
+                {
+                    if (Console.KeyAvailable)
+                    {
+                        var cmd = Console.ReadKey(intercept: true);
+                        switch (cmd.Key)
+                        {
+                            case ConsoleKey.S:
+                                server.PrintActiveConnections();
+                                break;
+                            case ConsoleKey.Q:
+                                Console.WriteLine("\n[INFO] Shutting down server...");
+                                server.Stop();
+                                running = false;
+                                break;
+                        }
+                    }
+                    else
+                    {
+                        await System.Threading.Tasks.Task.Delay(100);
+                    }
+                }
             }
             catch (FileNotFoundException ex)
             {
