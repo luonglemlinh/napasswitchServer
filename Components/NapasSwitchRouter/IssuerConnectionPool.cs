@@ -48,15 +48,24 @@ namespace router
                 }
                 else
                 {
-                    // Connection is dead, close it
+                    // Connection is dead, close it and fix the count
                     SafeClose(existingClient, existingStream);
+                    poolEntry.DecrementActiveCount();
                 }
             }
 
             // Create new connection
             Console.WriteLine($"[POOL] Creating new connection to {poolKey}");
             var client = new TcpClient();
-            client.Connect(issuerBank.Host, issuerBank.Port);
+            
+            // Use async connect with timeout instead of blocking
+            var connectTask = client.ConnectAsync(issuerBank.Host, issuerBank.Port);
+            if (!connectTask.Wait(issuerBank.Timeout))
+            {
+                client.Close();
+                throw new TimeoutException($"Connection to {poolKey} timed out after {issuerBank.Timeout}ms");
+            }
+            
             var stream = client.GetStream();
             stream.ReadTimeout = issuerBank.Timeout;
             stream.WriteTimeout = issuerBank.Timeout;
@@ -211,7 +220,7 @@ namespace router
             
             while (_availableConnections.TryDequeue(out var item))
             {
-                if (item.LastUsed > cutoffTime && item.Client.Connected)
+                if (item.LastUsed > cutoffTime && IsConnectionAlive(item.Client))
                 {
                     tempList.Add(item);
                 }
@@ -225,6 +234,17 @@ namespace router
             {
                 _availableConnections.Enqueue(item);
             }
+        }
+
+        private static bool IsConnectionAlive(TcpClient? client)
+        {
+            if (client == null || !client.Connected) return false;
+            try
+            {
+                var socket = client.Client;
+                return !(socket.Poll(1, SelectMode.SelectRead) && socket.Available == 0);
+            }
+            catch { return false; }
         }
 
         private void SafeDispose(PooledConnectionItem item)

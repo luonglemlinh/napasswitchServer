@@ -13,18 +13,11 @@ using core.Helpers;
 
 namespace router
 {
-    /// <summary>
-    /// Manages a persistent connection to the Transaction Switch (TS)
-    /// - Full Duplex: Listens for incoming requests (Echo) while allowing outbound transactions.
-    /// - Maintains a single long-lived connection.
-    /// - Sends periodic heartbeat (0800) messages.
-    /// - Auto-reconnects on failure.
-    /// </summary>
     public class TSPersistentConnection : IDisposable
     {
         private readonly IssuerBankConfig _tsConfig;
         private readonly IsoParser _parser;
-        private readonly object _writeLock = new object();
+        private readonly SemaphoreSlim _writeSemaphore = new SemaphoreSlim(1, 1);
         
         private TcpClient? _client;
         private NetworkStream? _stream;
@@ -34,7 +27,7 @@ namespace router
         private bool _isConnected;
         private bool _disposed;
         private int _heartbeatIntervalMs;
-        private int _stan = 1;
+        private int _stan = 0;
 
         // Track pending requests by STAN (DE11) to correlate responses
         private readonly ConcurrentDictionary<string, TaskCompletionSource<IsoMessage>> _pendingResponses = new();
@@ -63,7 +56,10 @@ namespace router
                 MessageLogger.LogConnectionEvent("TS-CONN", $"Connecting to {_tsConfig.IssuerName} at {_tsConfig.Host}:{_tsConfig.Port}...");
 
                 _client = new TcpClient();
-                await _client.ConnectAsync(_tsConfig.Host, _tsConfig.Port);
+                
+                // Add connection timeout (5 seconds)
+                using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+                await _client.ConnectAsync(_tsConfig.Host, _tsConfig.Port, connectCts.Token);
                 
                 // Configure TCP Keep-Alive (Windows specific)
                 ConfigureTcpKeepAlive(_client.Client);
@@ -73,6 +69,8 @@ namespace router
                 // Note: Don't set ReadTimeout for infinite listener loop
                 _stream.WriteTimeout = _tsConfig.Timeout;
 
+                // Dispose old CTS if exists
+                _connectionCts?.Dispose();
                 _connectionCts = new CancellationTokenSource();
                 _isConnected = true;
 
@@ -120,6 +118,8 @@ namespace router
                 // Configure Keep-Alive
                 ConfigureTcpKeepAlive(_client.Client);
 
+                // Dispose old CTS if exists
+                _connectionCts?.Dispose();
                 _connectionCts = new CancellationTokenSource();
                 _isConnected = true;
                 
@@ -170,7 +170,7 @@ namespace router
                 {
                     // 1. Read 4-byte Length Header
                     byte[] lenBytes = new byte[4];
-                    int bytesRead = await ReadExactAsync(_stream, lenBytes, 0, 4, token);
+                    int bytesRead = await NetworkStreamHelper.ReadExactAsync(_stream, lenBytes, 0, 4, token);
                     if (bytesRead == 0) 
                     {
                         Console.WriteLine("[TS-RECV] Remote side closed connection (0 bytes read)");
@@ -178,15 +178,15 @@ namespace router
                     }
 
                     string lenStr = System.Text.Encoding.ASCII.GetString(lenBytes);
-                    if (!int.TryParse(lenStr, out int msgLen))
+                    if (!int.TryParse(lenStr, out int msgLen) || msgLen <= 0 || msgLen > 9999)
                     {
-                        Console.WriteLine($"[TS-RECV] Invalid length header: {lenStr}");
+                        Console.WriteLine($"[TS-RECV] Invalid or out-of-range length header: {lenStr}");
                         break;
                     }
 
                     // 2. Read Payload
                     byte[] payload = new byte[msgLen];
-                    bytesRead = await ReadExactAsync(_stream, payload, 0, msgLen, token);
+                    bytesRead = await NetworkStreamHelper.ReadExactAsync(_stream, payload, 0, msgLen, token);
                     if (bytesRead != msgLen) 
                     {
                         Console.WriteLine($"[TS-RECV] Connection closed mid-message (expected {msgLen}, got {bytesRead})");
@@ -209,33 +209,22 @@ namespace router
             }
         }
 
-        private async Task<int> ReadExactAsync(NetworkStream stream, byte[] buffer, int offset, int count, CancellationToken token)
-        {
-            int totalRead = 0;
-            while (totalRead < count)
-            {
-                int read = await stream.ReadAsync(buffer, offset + totalRead, count - totalRead, token);
-                if (read == 0) return 0;
-                totalRead += read;
-            }
-            return totalRead;
-        }
-
         private void ProcessIncomingPayload(byte[] rawData)
         {
             try
             {
                 var msg = _parser.Parse(rawData);
-                string rc = msg.GetResponseCode() ?? "96";
-                // Silence 0800/0810 logs unless error
-                if (!msg.MessageType.StartsWith("08") || rc != "00")
+                bool isResponse = MtiHelper.IsResponse(msg.MessageType);
+                string rc = isResponse ? (msg.GetResponseCode() ?? "96") : "N/A";
+                // Silence 0810 success logs; always log requests and non-00 responses
+                if (!MtiHelper.IsNetworkManagement(msg.MessageType) || (isResponse && rc != "00"))
                 {
                     Console.WriteLine($"[TS-RECV] {msg.MessageType} | TRN: {msg.GetTRN() ?? "N/A"} | RC: {rc}");
                 }
                   
                   // Full message dump for debugging (TS to Switch)
                   // Log to file instead of console log spam
-                  if (!msg.MessageType.StartsWith("08"))
+                  if (!MtiHelper.IsNetworkManagement(msg.MessageType))
                   {
                       MessageLogger.LogMessage("TS-PERSISTENT", "ISS received", msg);
                   }
@@ -258,16 +247,17 @@ namespace router
             string mti = msg.MessageType;
             string stan = msg.Fields.ContainsKey(11) ? msg.Fields[11] : "000000";
 
-            if (!mti.StartsWith("08"))
+            if (!MtiHelper.IsNetworkManagement(mti))
             {
                 Console.WriteLine($"[TS-RECV] Received MTI={mti} STAN={stan}");
             }
 
-            if (mti == "0800")
+            if (mti == MtiHelper.NetworkManagementRequest)
             {
-                // Console.WriteLine($"[TS-RECV] Handling Check/Heartbeat Request from TS (AUTO-0810)");
+                // Echo request from remote TS - send 0810 response
+                _ = SendEchoResponseAsync(msg);
             }
-            else if (IsResponseMTI(mti))
+            else if (MtiHelper.IsResponse(mti))
             {
                 // Response to our request -> Find TCS and complete it
                 if (_pendingResponses.TryRemove(stan, out var tcs))
@@ -281,18 +271,11 @@ namespace router
             }
         }
 
-        private bool IsResponseMTI(string mti)
-        {
-            // NAPAS: 0200/0210, 0400/0410, 0800/0810.
-            // So if 3rd char is '1', it's a response.
-            return mti.Length == 4 && mti[2] == '1';
-        }
-
         private async Task SendEchoResponseAsync(IsoMessage request)
         {
             try
             {
-                var response = new IsoMessage { MessageType = "0810" };
+                var response = new IsoMessage { MessageType = MtiHelper.NetworkManagementResponse };
                 
                 // Copy essential fields
                 if (request.Fields.ContainsKey(7)) response.SetField(7, request.Fields[7]);
@@ -366,10 +349,19 @@ namespace router
         private IsoMessage BuildNetworkMessage(string networkCode)
         {
             var now = DateTime.Now;
-            var message = new IsoMessage { MessageType = "0800" };
+            var message = new IsoMessage { MessageType = MtiHelper.NetworkManagementRequest };
             
             message.SetField(7, now.ToString("MMddHHmmss"));
-            message.SetField(11, Interlocked.Increment(ref _stan).ToString("D6"));
+            
+            // Get next STAN with wrapping at 999999
+            int nextStan = Interlocked.Increment(ref _stan);
+            if (nextStan > 999999)
+            {
+                // Reset to 1 if we exceed 6 digits
+                Interlocked.CompareExchange(ref _stan, 1, nextStan);
+                nextStan = 1;
+            }
+            message.SetField(11, nextStan.ToString("D6"));
             
             // DE32: Acquiring Institution Identification Code (NAPAS Requirement)
             // Specification: n..11, LLVAR encoding
@@ -469,43 +461,61 @@ namespace router
 
             if (!isResponse)
             {
-                if (!message.MessageType.StartsWith("08"))
+                if (!MtiHelper.IsNetworkManagement(message.MessageType))
                 {
                     Console.WriteLine($"[{sessionId}] [TS-SEND] Sending {message.MessageType} (STAN={message.Fields.GetValueOrDefault(11)})");
                 }
                 // Note: full HEX dump removed for security; individual fields are logged in ForwardTransactionAsync
             }
 
-            lock (_writeLock)
+            // Use SemaphoreSlim for async-safe write operation
+            await _writeSemaphore.WaitAsync();
+            try
             {
                 _stream.Write(fullMessage, 0, fullMessage.Length);
                 _stream.Flush();
             }
-            
-            await Task.CompletedTask; // Keep signature async-compatible
+            finally
+            {
+                _writeSemaphore.Release();
+            }
         }
+
+        private int _reconnectAttempts;
+        private const int MaxReconnectDelayMs = 60000;
 
         private async Task ReconnectAsync()
         {
             Disconnect();
-            await Task.Delay(1000);
-            await ConnectAsync();
+            int delay = Math.Min(1000 * (1 << _reconnectAttempts), MaxReconnectDelayMs);
+            Console.WriteLine($"[TS-CONN] Reconnecting to {_tsConfig.IssuerName} in {delay}ms (attempt {_reconnectAttempts + 1})...");
+            await Task.Delay(delay);
+            bool success = await ConnectAsync();
+            if (success)
+                _reconnectAttempts = 0;
+            else
+                _reconnectAttempts++;
         }
 
         public void Disconnect()
         {
-            lock (_writeLock)
+            _isConnected = false;
+            _connectionCts?.Cancel();
+            
+            // Cancel all pending responses
+            foreach (var kvp in _pendingResponses)
             {
-                _isConnected = false;
-                _connectionCts?.Cancel();
-                
-                try { _stream?.Close(); } catch { }
-                try { _client?.Close(); } catch { }
-                
-                _client = null;
-                _stream = null;
+                kvp.Value.TrySetCanceled();
             }
-             Console.WriteLine($"[TS-CONN] Disconnected from {_tsConfig.IssuerName}");
+            _pendingResponses.Clear();
+            
+            try { _stream?.Close(); } catch { }
+            try { _client?.Close(); } catch { }
+            
+            _client = null;
+            _stream = null;
+            
+            Console.WriteLine($"[TS-CONN] Disconnected from {_tsConfig.IssuerName}");
         }
 
         public async Task SignOffAndDisconnectAsync()
@@ -520,6 +530,8 @@ namespace router
             _disposed = true;
             _heartbeatTimer?.Dispose();
             Disconnect();
+            _connectionCts?.Dispose();
+            _writeSemaphore?.Dispose();
         }
         private void ConfigureTcpKeepAlive(Socket socket)
         {

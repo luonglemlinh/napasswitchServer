@@ -39,37 +39,50 @@ namespace router
             return ForwardToIssuerAsync(request, issuerBank, sessionId).GetAwaiter().GetResult();
         }
 
-        public async Task<IsoMessage> ForwardToIssuerAsync(IsoMessage request, IssuerBankConfig issuerBank, string sessionId)
+        public async Task<IsoMessage> ForwardToIssuerAsync(IsoMessage request, IssuerBankConfig issuerBank, string sessionId, CancellationToken cancellationToken = default)
         {
             try
             {
-                // We wrap the internal internal logic in the retry policy
-                // Note: If RetryPolicy support async, we should use it. 
-                // For now, keeping it simple or wrapping Task.Run if needed.
-                return await Task.Run(() => _retryPolicy.Execute(
-                    () => ForwardToIssuerInternal(request, issuerBank, sessionId),
-                    RetryPolicy.IsRetryableException,
-                    $"ForwardToIssuer-{issuerBank.IssuerCode}"
-                ));
+                int retryCount = 0;
+                while (true)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    try
+                    {
+                        return await ForwardToIssuerInternalAsync(request, issuerBank, sessionId, cancellationToken);
+                    }
+                    catch (Exception ex) when (retryCount < 3 && RetryPolicy.IsRetryableException(ex))
+                    {
+                        retryCount++;
+                        int delay = 100 * (int)Math.Pow(2, retryCount - 1);
+                        Console.WriteLine($"[{sessionId}] [ISS-RETRY] Retry {retryCount}/3 for {issuerBank.IssuerName} after {delay}ms. Error: {ex.Message}");
+                        await Task.Delay(delay, cancellationToken);
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                Console.WriteLine($"[{sessionId}] [ISS-CANCEL] Operation cancelled");
+                return IsoResponseBuilder.CreateSystemErrorResponse(request, "96");
             }
             catch (SocketException ex)
             {
                 Console.WriteLine($"[{sessionId}] [ISS-ERROR] Socket error after retries: {ex.Message}");
-                return CreateSystemErrorResponse(request, "91"); // Issuer unavailable
+                return IsoResponseBuilder.CreateSystemErrorResponse(request, "91");
             }
             catch (TimeoutException ex)
             {
                 Console.WriteLine($"[{sessionId}] [ISS-ERROR] Timeout after retries: {ex.Message}");
-                return CreateTimeoutResponse(request);
+                return IsoResponseBuilder.CreateTimeoutResponse(request);
             }
             catch (Exception ex)
             {
                 Console.WriteLine($"[{sessionId}] [ISS-ERROR] Unexpected error after retries: {ex.Message}");
-                return CreateSystemErrorResponse(request, "96"); // System malfunction
+                return IsoResponseBuilder.CreateSystemErrorResponse(request, "96");
             }
         }
 
-        private IsoMessage ForwardToIssuerInternal(IsoMessage request, IssuerBankConfig issuerBank, string sessionId)
+        private async Task<IsoMessage> ForwardToIssuerInternalAsync(IsoMessage request, IssuerBankConfig issuerBank, string sessionId, CancellationToken cancellationToken = default)
         {
             PooledConnection? connection = null;
 
@@ -78,6 +91,8 @@ namespace router
                 Console.WriteLine($"[{sessionId}] [ISS-CONNECT] Connecting to {issuerBank.IssuerName} at {issuerBank.Host}:{issuerBank.Port}");
 
                 // Step 1: Get connection from pool
+                // Note: GetConnection is currently sync. In a full async refactor, this should be async too.
+                // For now, we accept this localized blocking call or wrap it if it takes time.
                 connection = _connectionPool.GetConnection(issuerBank);
 
                 // Step 2: Build and send the ISO-8583 message
@@ -90,29 +105,38 @@ namespace router
 
                 // Log request before forwarding to ISS
                 MessageLogger.LogMessage(sessionId, "ISS forward", request);
-                // Send to ISS
-                connection.Stream.Write(lengthHeader, 0, 2);
-                connection.Stream.Write(requestBytes, 0, requestBytes.Length);
-                connection.Stream.Flush();
+                
+                // Send to ISS (Async)
+                await connection.Stream.WriteAsync(lengthHeader, 0, 2);
+                await connection.Stream.WriteAsync(requestBytes, 0, requestBytes.Length);
+                await connection.Stream.FlushAsync();
 
                 Console.WriteLine($"[{sessionId}] [ISS-SEND] {request.MessageType} | TRN: {request.GetTRN() ?? "N/A"}");
 
                 // Step 3: Receive response from ISS
-                // First, try to read initial bytes to detect the format
                 byte[] initialBytes = new byte[4];
                 int initialRead = 0;
                 
                 // Set a reasonable read timeout
-                connection.Stream.ReadTimeout = 30000;
+                // NetworkStream.ReadAsync respects ReadTimeout in modern .NET but mostly relies on cancellation tokens.
+                // We'll use a CancellationToken source for timeout.
+                using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                cts.CancelAfter(30000);
                 
                 try
                 {
                     // Try to read first 4 bytes to detect format
-                    initialRead = connection.Stream.Read(initialBytes, 0, 4);
+                    initialRead = await connection.Stream.ReadAsync(initialBytes, 0, 4, cts.Token);
+                }
+                catch (OperationCanceledException)
+                {
+                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Timeout reading from TS");
+                    connection.MarkAsFailed();
+                    throw new TimeoutException("Timeout waiting for response header");
                 }
                 catch (System.IO.IOException ex)
                 {
-                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Timeout or error reading from TS: {ex.Message}");
+                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Error reading from TS: {ex.Message}");
                     connection.MarkAsFailed();
                     throw;
                 }
@@ -123,56 +147,45 @@ namespace router
                     connection.MarkAsFailed();
                     throw new System.IO.IOException("TS closed connection without response");
                 }
-
-                // Technical debug logs moved to file/removed for console clarity
-                // Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Initial {initialRead} bytes: {BitConverter.ToString(initialBytes, 0, initialRead)}");
                 
                 int responseLength;
                 byte[] responseBytes;
 
                 // Try to detect response format
-                // Check if first 2 bytes look like a valid 2-byte length (common format)
-                int len2Byte = (initialBytes[0] << 8) | initialBytes[1];
-                
-                // Check if first 4 bytes look like a 4-byte length
-                int len4Byte = (initialBytes[0] << 24) | (initialBytes[1] << 16) | (initialBytes[2] << 8) | initialBytes[3];
-
                 // Check if response starts with MTI (e.g., "0210" = 30 32 31 30)
                 bool startsWithMti = initialRead >= 4 && 
-                    initialBytes[0] == 0x30 && // '0'
-                    (initialBytes[1] == 0x32 || initialBytes[1] == 0x34 || initialBytes[1] == 0x38) && // '2', '4', or '8'
-                    initialBytes[2] == 0x31 && // '1'
-                    initialBytes[3] == 0x30;   // '0'
+                    initialBytes[0] == 0x30 && 
+                    (initialBytes[1] == 0x32 || initialBytes[1] == 0x34 || initialBytes[1] == 0x38);
 
                 if (startsWithMti)
                 {
-                    // No length header - response starts directly with MTI
-                    // Need to read until connection closes or timeout
-                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected: Response starts with MTI (no length header)");
+                    // No length header
+                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected: Response starts with MTI");
                     
-                    var buffer = new System.IO.MemoryStream();
+                    using var buffer = new System.IO.MemoryStream();
                     buffer.Write(initialBytes, 0, initialRead);
                     
                     byte[] chunk = new byte[1024];
                     int chunkRead;
-                    connection.Stream.ReadTimeout = 2000; // Short timeout for remaining data
+                    
+                    // Short timeout for remaining data
+                    using var chunkCts = new CancellationTokenSource(2000);
                     
                     try
                     {
-                        while ((chunkRead = connection.Stream.Read(chunk, 0, chunk.Length)) > 0)
+                        while ((chunkRead = await connection.Stream.ReadAsync(chunk, 0, chunk.Length, chunkCts.Token)) > 0)
                         {
                             buffer.Write(chunk, 0, chunkRead);
                         }
                     }
-                    catch (System.IO.IOException) { /* Timeout is expected */ }
+                    catch (OperationCanceledException) { /* Expected end of stream if no closure */ }
                     
                     responseBytes = buffer.ToArray();
                     responseLength = responseBytes.Length;
-                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Read {responseLength} bytes (no length header format)");
                 }
                 else 
                 {
-                    // Detect and handle length header (4-byte ASCII, 4-byte binary, or 2-byte binary)
+                    // Detect and handle length header
                     int messageLength = 0;
                     string lengthStr = System.Text.Encoding.ASCII.GetString(initialBytes);
                     
@@ -180,44 +193,29 @@ namespace router
                     int binLen2 = (initialBytes[0] << 8) | initialBytes[1];
 
                     if (int.TryParse(lengthStr, out int asciiLen) && asciiLen > 0 && asciiLen < 65535)
-                    {
                         messageLength = asciiLen;
-                        Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected 4-byte ASCII length header: {lengthStr} (len={messageLength})");
-                    }
                     else if (binLen4 > 0 && binLen4 < 65535)
-                    {
                         messageLength = binLen4;
-                        Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected 4-byte binary length header. len={messageLength}");
-                    }
                     else if (binLen2 > 0 && binLen2 < 65535)
-                    {
                         messageLength = binLen2;
-                        Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected 2-byte binary length header. len={messageLength}");
-                    }
                     else
                     {
-                        Console.WriteLine($"[{sessionId}] [ISS-ERROR] Unknown response format or invalid length!");
-                        Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Raw header: {BitConverter.ToString(initialBytes, 0, initialRead)}");
+                        Console.WriteLine($"[{sessionId}] [ISS-ERROR] Unknown response format!");
                         connection.MarkAsFailed();
-                        throw new System.IO.IOException($"Invalid message length header from TS");
+                        throw new System.IO.IOException($"Invalid message length header");
                     }
 
                     responseLength = messageLength;
                     responseBytes = new byte[responseLength];
 
-                    int bytesToCopyFromInitial = 0;
-                    if (messageLength == binLen2) // If 2-byte binary was the detected format
+                    int bytesToCopy = 0;
+                    if (messageLength == binLen2) // 2-byte binary
                     {
-                        bytesToCopyFromInitial = Math.Min(initialRead - 2, responseLength);
-                        Array.Copy(initialBytes, 2, responseBytes, 0, bytesToCopyFromInitial);
-                    }
-                    else // 4-byte formats
-                    {
-                        // In Case of 4-byte header, the initial bytes were ALL length
-                        bytesToCopyFromInitial = 0; 
+                        bytesToCopy = Math.Min(initialRead - 2, responseLength);
+                        Array.Copy(initialBytes, 2, responseBytes, 0, bytesToCopy);
                     }
 
-                    if (!TryReadExact(connection.Stream, responseBytes, bytesToCopyFromInitial, responseLength - bytesToCopyFromInitial))
+                    if (!await NetworkStreamHelper.TryReadExactAsync(connection.Stream, responseBytes, bytesToCopy, responseLength - bytesToCopy, cts.Token))
                     {
                         Console.WriteLine($"[{sessionId}] [ISS-ERROR] Failed to read complete response");
                         connection.MarkAsFailed();
@@ -225,11 +223,6 @@ namespace router
                     }
                 }
 
-                // Binary/ASCII dumps moved to file/removed for console clarity
-                // Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Response HEX: {BitConverter.ToString(responseBytes).Replace("-", " ")}");
-                // string asciiResponse = new string(responseBytes.Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
-                // Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Response ASCII: {asciiResponse}");
-                // Console.WriteLine($"[{sessionId}] [ISS-DEBUG] === END RESPONSE ===");
                 // Step 4: Parse the response
                 IsoMessage response = _parser.Parse(responseBytes);
                 string rc = response.GetResponseCode() ?? "96";
@@ -242,37 +235,20 @@ namespace router
 
                 if (rc == "30")
                 {
-                    Console.WriteLine($"[{sessionId}] [ISS-ALERT] Format Error (RC 30) received! Check DE32, DE33, or DE14 padding.");
+                    Console.WriteLine($"[{sessionId}] [ISS-ALERT] Format Error (RC 30) received!");
                 }
 
                 return response;
             }
             catch (Exception)
             {
-                // Mark connection as failed so it's not returned to pool
                 connection?.MarkAsFailed();
                 throw;
             }
             finally
             {
-                // Return connection to pool (or close if marked as failed)
                 connection?.Dispose();
             }
-        }
-
-        private bool TryReadExact(NetworkStream stream, byte[] buffer, int offset, int count)
-        {
-            int totalRead = 0;
-            while (totalRead < count)
-            {
-                int bytesRead = stream.Read(buffer, offset + totalRead, count - totalRead);
-                if (bytesRead == 0)
-                {
-                    return false;
-                }
-                totalRead += bytesRead;
-            }
-            return true;
         }
 
         public ConnectionPoolStats GetPoolStats() => _connectionPool.GetStats();
@@ -282,40 +258,6 @@ namespace router
             if (_disposed) return;
             _disposed = true;
             _connectionPool.Dispose();
-        }
-
-        
-        /// Create a timeout response (RC 68)
-        
-        private IsoMessage CreateTimeoutResponse(IsoMessage request)
-        {
-            return CreateSystemErrorResponse(request, "68"); // Response received too late
-        }
-
-        
-        /// Create a system error response with specified response code
-        
-        private IsoMessage CreateSystemErrorResponse(IsoMessage request, string responseCode)
-        {
-            var response = new IsoMessage
-            {
-                MessageType = request.MessageType switch
-                {
-                    "0200" => "0210",
-                    "0400" => "0410",
-                    _ => "0210"
-                }
-            };
-
-            // Copy essential fields from request
-            foreach (var field in new[] { 2, 3, 4, 7, 11, 12, 13, 32, 33, 37, 41, 42 })
-            {
-                if (request.HasField(field))
-                    response.SetField(field, request.GetField(field));
-            }
-
-            response.SetResponseCode(responseCode);
-            return response;
         }
 
         private static string MaskTrack2(string? track2)

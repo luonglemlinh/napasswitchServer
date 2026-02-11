@@ -197,9 +197,10 @@ public class IsoParser
             var fieldDef = _schema.GetField(fieldNum);
             if (fieldDef == null)
             {
-                // Log fields present in bitmap but not in schema (like DE#118)
-                Console.WriteLine($"[PARSER-WARN] Field DE#{fieldNum} is present in bitmap but NOT defined in schema - SKIPPING");
-                continue; // Field not defined in schema
+                // Cannot determine field length without schema definition;
+                // all subsequent field offsets would be corrupted if we continue.
+                Console.WriteLine($"[PARSER-WARN] Field DE#{fieldNum} is present in bitmap but NOT defined in schema - stopping field extraction to prevent offset corruption");
+                break;
             }
 
             string value = ExtractFieldValue(data, fieldDef, ref offset);
@@ -224,6 +225,9 @@ public class IsoParser
 
     private string ExtractFixedField(byte[] data, int length, ref int offset)
     {
+        if (offset + length > data.Length)
+            throw new ArgumentException($"Insufficient data for fixed field. Expected {length} bytes at offset {offset}, but only {data.Length - offset} bytes remain.");
+
         string value = System.Text.Encoding.ASCII.GetString(data, offset, length);
         offset += length;
         return value;
@@ -285,11 +289,12 @@ public class IsoParser
         // 1. Message Type
         bytes.AddRange(Encoding.ASCII.GetBytes(message.MessageType));
 
-        // 2. Bitmap
+        // 2. Bitmap - only set bits for fields that exist in the schema
         var bitmap = new bool[128];
         foreach (var fieldNum in message.Fields.Keys)
         {
-            if (fieldNum < 1 || fieldNum > 128) continue;
+            if (fieldNum < 2 || fieldNum > 128) continue;
+            if (_schema.GetField(fieldNum) == null) continue; // Skip fields without schema definition
             bitmap[fieldNum - 1] = true;
             if (fieldNum > 64) bitmap[0] = true; // indicate secondary bitmap
         }

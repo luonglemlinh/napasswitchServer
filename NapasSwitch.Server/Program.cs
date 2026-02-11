@@ -80,8 +80,12 @@ namespace server
                 }
 
                 // Step 4: Create and start the server
-                int[] ports = { 1111, 2222, 3333, 1177 };
-                var server = new TcpSwitchServer(ports, dbConnectionString, enableLogging);
+                // Load ports from ServerConfig.xml instead of hardcoding
+                var serverConfig = ConfigurationLoader.Instance.ServerConfig;
+                int[] ports = serverConfig.GetAllPorts();
+                
+                Console.WriteLine($"[INIT] Listening on {ports.Length} ports: {string.Join(", ", ports)}");
+                using var server = new TcpSwitchServer(ports, dbConnectionString, enableLogging);
 
                 Console.WriteLine("\n[READY] Press ENTER to start the server, or 'Q' to quit...");
                 var startKey = Console.ReadKey();

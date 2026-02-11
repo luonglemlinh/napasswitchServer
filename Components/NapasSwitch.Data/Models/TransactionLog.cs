@@ -21,7 +21,7 @@ namespace data.Models
         public string? TerminalID { get; set; }
         public string? MerchantID { get; set; }
         public DateTime TransactionTime { get; set; }
-        public DateTime LoggedAt { get; set; } = DateTime.Now;
+        public DateTime LoggedAt { get; set; } = DateTime.UtcNow;
         public int ProcessingTimeMs { get; set; }
         
         

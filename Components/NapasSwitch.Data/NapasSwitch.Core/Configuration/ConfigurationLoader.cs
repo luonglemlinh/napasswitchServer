@@ -21,14 +21,19 @@ namespace core.Configuration
         private AcquirerRoutingConfiguration? _acquirerRouting;
         private ResponseCodeConfiguration? _responseCodes;
         private DatabaseConfiguration? _databaseConfig;
+        private ServerConfiguration? _serverConfig;
 
         // Quick lookup dictionaries (for performance!)
-        private Dictionary<string, IssuerBankConfig> _binToIssuerMap = new();
-        private Dictionary<string, AcquirerConfig> _acquirerMap = new();
-        private Dictionary<string, string> _responseCodeMap = new();
+        // Volatile ensures visibility across threads when swapped atomically during reload.
+        private volatile Dictionary<string, IssuerBankConfig> _binToIssuerMap = new();
+        private volatile Dictionary<string, AcquirerConfig> _acquirerMap = new();
+        private volatile Dictionary<string, string> _responseCodeMap = new();
         
         // Default/fallback issuer for when no BIN match is found
-        private IssuerBankConfig? _defaultIssuer;
+        private volatile IssuerBankConfig? _defaultIssuer;
+
+        // Lock for protecting configuration reload operations
+        private readonly object _configLock = new object();
 
         private ConfigurationLoader() { }
 
@@ -56,6 +61,8 @@ namespace core.Configuration
         
         public void LoadConfigurations(string configDirectory)
         {
+            lock (_configLock)
+            {
             if (!Directory.Exists(configDirectory))
                 throw new DirectoryNotFoundException($"Config directory not found: {configDirectory}");
 
@@ -79,7 +86,7 @@ namespace core.Configuration
             BuildResponseCodeMap();
             Console.WriteLine($"[CONFIG] Loaded {_responseCodes.Codes.Count} response codes");
 
-            // ADD THIS: Load Database Configuration
+            // Load Database Configuration
             string dbConfigPath = Path.Combine(configDirectory, "DBconfig.xml");
             if (File.Exists(dbConfigPath))
             {
@@ -92,7 +99,33 @@ namespace core.Configuration
                 _databaseConfig = new DatabaseConfiguration { EnableLogging = false };
             }
 
+            // Allow environment variable to override the connection string
+            string? envConnStr = Environment.GetEnvironmentVariable("NAPAS_DB_CONNECTION_STRING");
+            if (!string.IsNullOrEmpty(envConnStr))
+            {
+                _databaseConfig.ConnectionString = envConnStr;
+                Console.WriteLine("[CONFIG] Database connection string overridden by NAPAS_DB_CONNECTION_STRING env variable");
+            }
+
+            // Load Server Configuration (Listener Ports)
+            string serverConfigPath = Path.Combine(configDirectory, "ServerConfig.xml");
+            if (File.Exists(serverConfigPath))
+            {
+                _serverConfig = LoadXmlConfig<ServerConfiguration>(serverConfigPath);
+                Console.WriteLine($"[CONFIG] Loaded server configuration - ISS Ports: [{string.Join(", ", _serverConfig.IssuerPorts)}], ACQ Ports: [{string.Join(", ", _serverConfig.AcquirerPorts)}]");
+            }
+            else
+            {
+                Console.WriteLine($"[CONFIG] WARNING: ServerConfig.xml not found, using default ports");
+                _serverConfig = new ServerConfiguration 
+                { 
+                    IssuerPorts = new List<int> { 1111, 2222, 3333 },
+                    AcquirerPorts = new List<int> { 1177 }
+                };
+            }
+
             Console.WriteLine("[CONFIG] All configurations loaded successfully!\n");
+            } // end lock
         }
 
         
@@ -142,8 +175,8 @@ namespace core.Configuration
 
         private void BuildBinToIssuerMap()
         {
-            _binToIssuerMap.Clear();
-            _defaultIssuer = null;
+            var newMap = new Dictionary<string, IssuerBankConfig>();
+            IssuerBankConfig? newDefault = null;
             
             foreach (var bank in _binRouting!.Banks)
             {
@@ -167,33 +200,39 @@ namespace core.Configuration
                 // Check if this is the default/fallback issuer
                 if (bank.IsDefault)
                 {
-                    _defaultIssuer = bank;
+                    newDefault = bank;
                     Console.WriteLine($"[CONFIG] Default issuer set to: {bank.IssuerName} ({bank.Host}:{bank.Port})");
                 }
                 
                 foreach (var bin in bank.AllBins)
                 {
-                    _binToIssuerMap[bin] = bank;
+                    newMap[bin] = bank;
                 }
             }
+
+            // Atomic reference swap
+            _binToIssuerMap = newMap;
+            _defaultIssuer = newDefault;
         }
 
         private void BuildAcquirerMap()
         {
-            _acquirerMap.Clear();
+            var newMap = new Dictionary<string, AcquirerConfig>();
             foreach (var acq in _acquirerRouting!.Acquirers)
             {
-                _acquirerMap[acq.AcquirerCode] = acq;
+                newMap[acq.AcquirerCode] = acq;
             }
+            _acquirerMap = newMap;
         }
 
         private void BuildResponseCodeMap()
         {
-            _responseCodeMap.Clear();
+            var newMap = new Dictionary<string, string>();
             foreach (var rc in _responseCodes!.Codes)
             {
-                _responseCodeMap[rc.Code] = rc.Description;
+                newMap[rc.Code] = rc.Description;
             }
+            _responseCodeMap = newMap;
         }
 
         // ========== PUBLIC API ==========
@@ -260,6 +299,8 @@ namespace core.Configuration
         }
 
         public DatabaseConfiguration DatabaseConfig => _databaseConfig ?? throw new InvalidOperationException("Database configuration not loaded");
+        
+        public ServerConfiguration ServerConfig => _serverConfig ?? throw new InvalidOperationException("Server configuration not loaded");
     }
 
     public class ConfigurationStats

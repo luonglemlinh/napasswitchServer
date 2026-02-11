@@ -75,8 +75,8 @@ namespace data
                     command.Parameters.AddWithValue("@ResponseCode", (object?)response.GetResponseCode() ?? DBNull.Value);
                     command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
                     command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@TransactionTime", DateTime.Now);
-                    command.Parameters.AddWithValue("@LoggedAt", DateTime.Now);
+                    command.Parameters.AddWithValue("@TransactionTime", DateTime.UtcNow);
+                    command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
                     command.Parameters.AddWithValue("@ProcessingTimeMs", processingTimeMs);
                     command.Parameters.AddWithValue("@Direction", direction);
 
@@ -110,11 +110,11 @@ namespace data
                                 INSERT INTO TransactionLog 
                                 (SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
                                  AcquirerID, IssuerID, TerminalID, MerchantID,
-                                 TransactionTime, LoggedAt, Direction)
+                                 TransactionTime, LoggedAt, ProcessingTimeMs, Direction)
                                 VALUES 
                                 (@SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
                                  @AcquirerID, @IssuerID, @TerminalID, @MerchantID,
-                                 @TransactionTime, @LoggedAt, @Direction)";
+                                 @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction)";
 
                 using (var command = new SqlCommand(query, connection))
                 {
@@ -128,8 +128,9 @@ namespace data
                     command.Parameters.AddWithValue("@IssuerID", (object?)request.GetIssuerID() ?? DBNull.Value);
                     command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
                     command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@TransactionTime", DateTime.Now);
-                    command.Parameters.AddWithValue("@LoggedAt", DateTime.Now);
+                    command.Parameters.AddWithValue("@TransactionTime", DateTime.UtcNow);
+                    command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
+                    command.Parameters.AddWithValue("@ProcessingTimeMs", 0); // Inbound requests don't have processing time yet
                     command.Parameters.AddWithValue("@Direction", direction);
 
                     await command.ExecuteNonQueryAsync();

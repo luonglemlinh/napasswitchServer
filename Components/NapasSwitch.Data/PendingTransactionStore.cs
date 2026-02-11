@@ -27,7 +27,7 @@ namespace data
             using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var command = new SqlCommand(@"
+            using var command = new SqlCommand(@"
                 INSERT INTO PendingTransactions (
                     TransactionId, SessionId, MessageType,
                     RequestPAN, RequestAmount, RequestProcessingCode, RequestSTAN,
@@ -72,7 +72,7 @@ namespace data
             using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var command = new SqlCommand(@"
+            using var command = new SqlCommand(@"
                 SELECT TransactionId, SessionId, MessageType, 
                        RequestPAN, RequestAmount, RequestProcessingCode, RequestSTAN,
                        RequestDateTime, RequestAcquirerID, RequestTerminalID, RequestMerchantID,
@@ -113,7 +113,7 @@ namespace data
             using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var command = new SqlCommand(@"
+            using var command = new SqlCommand(@"
                 SELECT TransactionId, SessionId, MessageType, 
                        RequestPAN, RequestAmount, RequestProcessingCode, RequestSTAN,
                        RequestDateTime, RequestAcquirerID, RequestTerminalID, RequestMerchantID,
@@ -158,7 +158,7 @@ namespace data
             using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var command = new SqlCommand(@"
+            using var command = new SqlCommand(@"
                 SELECT TransactionId, SessionId, MessageType, 
                        RequestPAN, RequestAmount, RequestProcessingCode, RequestSTAN,
                        RequestDateTime, RequestAcquirerID, RequestTerminalID, RequestMerchantID,
@@ -201,7 +201,7 @@ namespace data
             using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var command = new SqlCommand(@"
+            using var command = new SqlCommand(@"
                 UPDATE PendingTransactions 
                 SET Status = 'MATCHED', 
                     ResponseCode = @ResponseCode,
@@ -221,7 +221,7 @@ namespace data
             using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var command = new SqlCommand(@"
+            using var command = new SqlCommand(@"
                 UPDATE PendingTransactions 
                 SET Status = 'MISMATCH', 
                     ResponseCode = @ErrorReason,
@@ -242,7 +242,7 @@ namespace data
             await connection.OpenAsync();
 
             var vnTime = GetVietnamTime();
-            var command = new SqlCommand(@"
+            using var command = new SqlCommand(@"
                 UPDATE PendingTransactions 
                 SET Status = 'EXPIRED', UpdatedAt = @VietnamTime
                 WHERE ExpiresAt < @VietnamTime AND Status = 'PENDING'", connection);
@@ -261,7 +261,7 @@ namespace data
             using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            var command = new SqlCommand(@"
+            using var command = new SqlCommand(@"
                 SELECT COUNT(*) FROM PendingTransactions WHERE Status = 'PENDING'", connection);
 
             var result = await command.ExecuteScalarAsync();
