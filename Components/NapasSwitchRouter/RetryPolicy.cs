@@ -95,9 +95,8 @@ namespace router
             // Exponential backoff with jitter
             double delay = _baseDelayMs * Math.Pow(_backoffMultiplier, attempt - 1);
             
-            // Add random jitter (±25%)
-            var random = new Random();
-            double jitter = delay * 0.25 * (random.NextDouble() * 2 - 1);
+            // Add random jitter (±25%) using thread-safe Random.Shared
+            double jitter = delay * 0.25 * (Random.Shared.NextDouble() * 2 - 1);
             delay += jitter;
 
             return Math.Min((int)delay, _maxDelayMs);

@@ -32,7 +32,7 @@
       <IssuerCode>970418</IssuerCode>
       <IssuerName>BIDV</IssuerName>
       <Host>10.145.48.70</Host>
-      <Port>1111</Port>
+      <Port>4444</Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>970418</Bin>

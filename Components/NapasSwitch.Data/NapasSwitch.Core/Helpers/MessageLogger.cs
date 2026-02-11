@@ -18,18 +18,31 @@ namespace core.Helpers
         private static readonly string ConnectionLogFilePath = Path.Combine(LogDir, "h2h_connections.txt");
         private static readonly object _lock = new object();
 
+        private static DateTime _lastRotationCheck = DateTime.MinValue;
+        private static bool _logDirExists = false;
+        private static readonly TimeSpan RotationCheckInterval = TimeSpan.FromSeconds(5);
+
         private static void EnsureInitialized()
         {
             try
             {
-                if (!Directory.Exists(LogDir))
+                if (!_logDirExists)
                 {
-                    Directory.CreateDirectory(LogDir);
+                    if (!Directory.Exists(LogDir))
+                    {
+                        Directory.CreateDirectory(LogDir);
+                    }
+                    _logDirExists = true;
                 }
 
-                RotateFile(LogFilePath);
-                RotateFile(NetworkLogFilePath);
-                RotateFile(ConnectionLogFilePath);
+                // Throttle rotation checks to avoid hitting disk on every log write
+                if (DateTime.UtcNow - _lastRotationCheck > RotationCheckInterval)
+                {
+                    RotateFile(LogFilePath);
+                    RotateFile(NetworkLogFilePath);
+                    RotateFile(ConnectionLogFilePath);
+                    _lastRotationCheck = DateTime.UtcNow;
+                }
             }
             catch { /* Ignore logging errors to prevent crash */ }
         }
@@ -43,7 +56,7 @@ namespace core.Helpers
                     EnsureInitialized();
                     using (var writer = new StreamWriter(ConnectionLogFilePath, append: true))
                     {
-                        string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
                         writer.WriteLine($"{timestamp} [{source}] {message}");
                     }
                 }
@@ -53,17 +66,21 @@ namespace core.Helpers
 
         private static void RotateFile(string path)
         {
-            if (File.Exists(path))
+            try 
             {
-                var info = new FileInfo(path);
-                if (info.Length > 10 * 1024 * 1024)
+                if (File.Exists(path))
                 {
-                    string fileName = Path.GetFileNameWithoutExtension(path);
-                    string ext = Path.GetExtension(path);
-                    string newPath = Path.Combine(LogDir, $"{fileName}_{DateTime.Now:yyyyMMdd_HHmmss}{ext}");
-                    File.Move(path, newPath);
+                    var info = new FileInfo(path);
+                    if (info.Length > 10 * 1024 * 1024)
+                    {
+                        string fileName = Path.GetFileNameWithoutExtension(path);
+                        string ext = Path.GetExtension(path);
+                        string newPath = Path.Combine(LogDir, $"{fileName}_{DateTime.UtcNow:yyyyMMdd_HHmmss}{ext}");
+                        File.Move(path, newPath);
+                    }
                 }
             }
+            catch { /* Best effort rotation */ }
         }
 
         public static void LogRaw(string sessionId, string hex, string ascii)
@@ -75,7 +92,7 @@ namespace core.Helpers
                     EnsureInitialized();
                     using (var writer = new StreamWriter(LogFilePath, append: true))
                     {
-                        string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
                         writer.WriteLine($"{timestamp} [{sessionId}] Raw HEX: {hex}");
                         writer.WriteLine($"{timestamp} [{sessionId}] Raw ASCII: {ascii}");
                     }
@@ -98,7 +115,7 @@ namespace core.Helpers
                     {
                         string trn = message.GetTRN() ?? "N/A";
                         string mti = message.MessageType;
-                        string timestamp = DateTime.Now.ToString("yyyy-MM-dd HH:mm:ss.fff");
+                        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
 
                         writer.WriteLine($"{timestamp} <{trn}> [------------] {direction}:");
                         writer.WriteLine($"\tType: {mti}");
@@ -122,10 +139,13 @@ namespace core.Helpers
                             int fNum = field.Key;
                             string value = field.Value;
                             
-                            writer.WriteLine($"\t{fNum:D3}:{value}");
+                            // Mask sensitive fields for PCI-DSS compliance
+                            string maskedValue = MaskSensitiveField(fNum, value);
+                            
+                            writer.WriteLine($"\t{fNum:D3}:{maskedValue}");
 
-                            // Subfield logging
-                            LogSubfields(writer, fNum, value);
+                            // Subfield logging (use masked value for sensitive fields)
+                            LogSubfields(writer, fNum, maskedValue);
                         }
                     }
                 }
@@ -174,6 +194,43 @@ namespace core.Helpers
                 return (val / 100).ToString("N2");
             }
             return raw;
+        }
+
+        /// <summary>
+        /// Masks sensitive field values for PCI-DSS compliance.
+        /// DE#2 (PAN), DE#35 (Track 2), DE#52 (PIN Block) are masked.
+        /// </summary>
+        private static string MaskSensitiveField(int fieldNumber, string value)
+        {
+            if (string.IsNullOrEmpty(value)) return value;
+
+            switch (fieldNumber)
+            {
+                case 2: // PAN - show first 6 and last 4 digits
+                    if (value.Length >= 13)
+                    {
+                        int maskedLength = value.Length - 10;
+                        return value.Substring(0, 6) + new string('*', maskedLength) + value.Substring(value.Length - 4);
+                    }
+                    return new string('*', value.Length);
+
+                case 35: // Track 2 Data - mask everything except separator
+                    int separatorIndex = value.IndexOf('=');
+                    if (separatorIndex > 6 && value.Length > separatorIndex + 5)
+                    {
+                        // Show first 6, separator, last 4
+                        return value.Substring(0, 6) + new string('*', separatorIndex - 6) + 
+                               "=" + new string('*', value.Length - separatorIndex - 5) + 
+                               value.Substring(value.Length - 4);
+                    }
+                    return new string('*', value.Length);
+
+                case 52: // PIN Block - fully masked
+                    return new string('*', value.Length);
+
+                default:
+                    return value;
+            }
         }
     }
 }

@@ -26,8 +26,9 @@ namespace server
 public class TcpSwitchServer : IDisposable
 {
     private readonly List<TcpListener> _listeners = new();
-    private bool _isRunning;
+    private volatile bool _isRunning;
     private readonly IReadOnlyList<int> _ports;
+    private readonly DateTime _serverStartTime;
     private readonly IsoParser _parser;
     private readonly IssuerConnector _issuerConnector;
     private readonly TransactionLogger? _transactionLogger;
@@ -39,6 +40,7 @@ public class TcpSwitchServer : IDisposable
     private Timer? _statsTimer;
     private Timer? _poolHealthTimer;
     private Timer? _cleanupTimer;
+    private CancellationTokenSource? _serverCts;
 
     // Persistent connection managers for all issuers
     private readonly ConcurrentDictionary<string, TSConnectionManager> _issuerConnections = new();
@@ -60,6 +62,7 @@ public class TcpSwitchServer : IDisposable
     // New multi-port constructor
     public TcpSwitchServer(int[] ports, string dbConnectionString = "", bool enableLogging = true)
     {
+        _serverStartTime = DateTime.UtcNow;
         _ports = ports.Distinct().Where(p => p > 0).ToList();
         if (_ports.Count == 0) throw new ArgumentException("At least one valid port is required.", nameof(ports));
 
@@ -184,8 +187,9 @@ public class TcpSwitchServer : IDisposable
         
         private void StartBackgroundMonitoring()
         {
-            _statsTimer = new Timer(LogServerStats, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
-            _poolHealthTimer = new Timer(LogPoolHealth, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+            // Disabled timer-based stats - now logs only on connection events
+            // _statsTimer = new Timer(LogServerStats, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
+            // _poolHealthTimer = new Timer(LogPoolHealth, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
             
             if (_pendingStore != null)
             {
@@ -193,7 +197,7 @@ public class TcpSwitchServer : IDisposable
                     null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
             }
             
-            Console.WriteLine("[MONITORING] Background stats logging enabled (every 30s)");
+            Console.WriteLine("[MONITORING] Event-driven stats logging enabled (on connect/disconnect)");
         }
         
         private void LogServerStats(object? state)
@@ -225,6 +229,7 @@ public class TcpSwitchServer : IDisposable
         public void Start()
         {
             _isRunning = true;
+            _serverCts = new CancellationTokenSource();
 
             foreach (var port in _ports)
             {
@@ -238,20 +243,11 @@ public class TcpSwitchServer : IDisposable
             Console.WriteLine("╔═══════════════════════════════════════════════════╗");
             Console.WriteLine("║       NAPAS SWITCH SERVER STARTED                 ║");
             Console.WriteLine("╚═══════════════════════════════════════════════════╝");
-            var issPorts = new List<string>();
-            var acqPorts = new List<string>();
-
-            foreach (var port in _ports)
-            {
-                if (_portToIssuerCode.ContainsKey(port))
-                {
-                    issPorts.Add(port.ToString());
-                }
-                else
-                {
-                    acqPorts.Add(port.ToString());
-                }
-            }
+            
+            // Get port configuration from ServerConfig
+            var serverConfig = ConfigurationLoader.Instance.ServerConfig;
+            var issPorts = serverConfig.IssuerPorts.Select(p => p.ToString()).ToList();
+            var acqPorts = serverConfig.AcquirerPorts.Select(p => p.ToString()).ToList();
 
             if (issPorts.Count > 0)
                 Console.WriteLine($" [ISS] Listening on port: {string.Join(", ", issPorts)}");
@@ -270,8 +266,11 @@ public class TcpSwitchServer : IDisposable
                 try
                 {
                     var client = await listener.AcceptTcpClientAsync();
-                    // Pass the local port so we know which interface/purpose this connection serves
-                    _ = Task.Run(() => HandleClientAsync(client, port));
+                    _ = Task.Run(async () =>
+                    {
+                        try { await HandleClientAsync(client, port); }
+                        catch (Exception ex) { Console.WriteLine($"[ERROR] Unhandled exception on port {port}: {ex.Message}"); }
+                    });
                     
                     // Note: Active sessions count might include both ACQ and ISS sessions now
                     // Console.WriteLine($" New connection accepted on port {port}.");
@@ -352,6 +351,10 @@ public class TcpSwitchServer : IDisposable
                 _activeSessions.TryAdd(sessionId, session);
 
                 Console.WriteLine($" [{sessionId}] Client connected from {clientEndpoint}");
+                
+                // Log stats on connection join
+                LogServerStats(null);
+                LogPoolHealth(null);
 
                 // Set timeouts (30 seconds)
                 stream.ReadTimeout = 30000;
@@ -368,7 +371,7 @@ public class TcpSwitchServer : IDisposable
                     int messageLength;
                     string lengthStr = System.Text.Encoding.ASCII.GetString(lengthBytes);
 
-                    if (int.TryParse(lengthStr, out int asciiLen) && asciiLen > 0 && asciiLen < 65535)
+                    if (int.TryParse(lengthStr, out int asciiLen) && asciiLen > 0 && asciiLen < 2000)
                     {
                         messageLength = asciiLen;
                         Console.WriteLine($"  [{sessionId}] Detected 4-byte ASCII length header: {lengthStr} (len={messageLength})");
@@ -381,12 +384,12 @@ public class TcpSwitchServer : IDisposable
                         // Or try 2-byte binary (legacy) if the first 2 bytes were actually the length and we over-read
                         int binLen2 = (lengthBytes[0] << 8) | lengthBytes[1];
 
-                        if (binLen4 > 0 && binLen4 < 65535)
+                        if (binLen4 > 0 && binLen4 < 2000)
                         {
                             messageLength = binLen4;
                             Console.WriteLine($"  [{sessionId}] Detected 4-byte binary length header. len={messageLength}");
                         }
-                        else if (binLen2 > 0 && binLen2 < 65535)
+                        else if (binLen2 > 0 && binLen2 < 2000)
                         {
                             messageLength = binLen2;
                             Console.WriteLine($"  [{sessionId}] Detected 2-byte binary length header (over-read 2 bytes). len={messageLength}");
@@ -413,7 +416,7 @@ public class TcpSwitchServer : IDisposable
                     byte[] isoPayload = messageBytes;
 
                     // Step 3: Process the message and get response
-                    byte[]? responseBytes = await ProcessMessageAsync(isoPayload, sessionId);
+                    byte[]? responseBytes = await ProcessMessageAsync(isoPayload, sessionId, _serverCts?.Token ?? CancellationToken.None);
 
                     // Step 4: Send response back to client
                     if (responseBytes != null && responseBytes.Length > 0)
@@ -446,23 +449,16 @@ public class TcpSwitchServer : IDisposable
                 _activeSessions.TryRemove(sessionId, out _);
 
                 Console.WriteLine($" [{sessionId}] Client disconnected. Active sessions: {_activeSessions.Count}\n");
+                
+                // Log stats on connection disconnect
+                LogServerStats(null);
+                LogPoolHealth(null);
             }
         }
 
         private static byte[]? ReadExactOrNull(NetworkStream stream, int length)
         {
-            if (length <= 0) return Array.Empty<byte>();
-
-            byte[] buffer = new byte[length];
-            int totalRead = 0;
-            while (totalRead < length)
-            {
-                int read = stream.Read(buffer, totalRead, length - totalRead);
-                if (read <= 0) return null;
-                totalRead += read;
-            }
-
-            return buffer;
+            return NetworkStreamHelper.ReadExactOrNull(stream, length);
         }
 
         private static void PrintRawMessage(byte[] messageBytes, string sessionId)
@@ -475,7 +471,7 @@ public class TcpSwitchServer : IDisposable
         /// Process an incoming ISO-8583 message
             
         
-        private async Task<byte[]?> ProcessMessageAsync(byte[] messageBytes, string sessionId)
+        private async Task<byte[]?> ProcessMessageAsync(byte[] messageBytes, string sessionId, CancellationToken cancellationToken = default)
         {
             var stopwatch = Stopwatch.StartNew();
             TransactionContext? txnContext = null;
@@ -491,16 +487,16 @@ public class TcpSwitchServer : IDisposable
                     NormalizeTrack2(request);
                 } catch (Exception ex) {
                     Console.WriteLine($"[{sessionId}] Parse error: {ex.Message}");
-                    return _parser.Build(CreateErrorResponse(new IsoMessage { MessageType = "0200" }, "30"));
+                    return _parser.Build(IsoResponseBuilder.CreateErrorResponse(new IsoMessage { MessageType = MtiHelper.AuthorizationRequest }, "30"));
                 }
 
                 txnContext = _stateMachine.CreateTransaction(sessionId, request);
                 NormalizeLocalDateTimeFields(request);
 
-                if (request.MessageType == "0200" || request.MessageType == "0400")
+                if (MtiHelper.IsFinancialRequest(request.MessageType))
                 {
                     EnsureMandatoryNapasFields(request, sessionId);
-                    if (request.MessageType == "0200")
+                    if (request.MessageType == MtiHelper.AuthorizationRequest)
                     {
                         txnContext.TRN = GenerateAlphaNumericTRN(16);
                         request.SetTRN(txnContext.TRN);
@@ -512,7 +508,7 @@ public class TcpSwitchServer : IDisposable
                 if (!validationResult.IsValid)
                 {
                     txnContext.TryTransitionTo(TransactionState.Failed, validationResult.GetFirstErrorCode(), "Validation failed");
-                    return _parser.Build(CreateErrorResponse(request, validationResult.GetFirstErrorCode()));
+                    return _parser.Build(IsoResponseBuilder.CreateErrorResponse(request, validationResult.GetFirstErrorCode()));
                 }
                 
                 txnContext.TryTransitionTo(TransactionState.Routing);
@@ -521,32 +517,32 @@ public class TcpSwitchServer : IDisposable
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = !string.IsNullOrEmpty(clearPan) ? _securityProvider.EncryptPAN(clearPan) : null;
 
-                if (request.MessageType == "0200" || request.MessageType == "0400")
+                if (MtiHelper.IsFinancialRequest(request.MessageType))
                 {
                     var requestCopy = CloneWithEncryptedPan(request, encryptedPan);
                     if (_pendingStore != null) await _pendingStore.StoreRequestAsync(txnContext.TransactionId, sessionId, requestCopy, messageBytes);
-                    if (_transactionLogger != null) _ = _transactionLogger.LogRequestAsync(requestCopy, sessionId, "INBOUND");
+                    if (_transactionLogger != null) _ = _transactionLogger.LogRequestAsync(requestCopy, sessionId, "INBOUND").ContinueWith(t => Console.WriteLine($"[LOG-ERROR] {t.Exception?.GetBaseException().Message}"), TaskContinuationOptions.OnlyOnFaulted);
                 }
 
                 IsoMessage response = request.MessageType switch
                 {
-                    "0200" => await HandleAuthorizationRequestAsync(request, sessionId, txnContext),
-                    "0400" => await HandleReversalRequestAsync(request, sessionId, txnContext),
-                    "0420" => await HandleReversalAdviceAsync(request, sessionId, txnContext),
-                    "0800" => HandleEchoRequest(request, sessionId, txnContext),
-                    _ => CreateErrorResponse(request, "12")
+                    MtiHelper.AuthorizationRequest => await HandleAuthorizationRequestAsync(request, sessionId, txnContext, cancellationToken),
+                    MtiHelper.ReversalRequest => await HandleReversalRequestAsync(request, sessionId, txnContext, cancellationToken),
+                    MtiHelper.ReversalAdvice => await HandleReversalAdviceAsync(request, sessionId, txnContext, cancellationToken),
+                    MtiHelper.NetworkManagementRequest => HandleEchoRequest(request, sessionId, txnContext),
+                    _ => IsoResponseBuilder.CreateErrorResponse(request, "12")
                 };
 
                 if (!string.IsNullOrEmpty(txnContext.TRN)) response.SetTRN(txnContext.TRN);
                 
-                if (_pendingStore != null && (request.MessageType == "0200" || request.MessageType == "0400"))
+                if (_pendingStore != null && MtiHelper.IsFinancialRequest(request.MessageType))
                 {
                     var correlationResult = _correlationValidator.ValidateResponseMatchesRequest(request, response);
                     if (!correlationResult.IsValid)
                     {
                         await _pendingStore.MarkAsMismatchAsync(txnContext.TransactionId, "Correlation failed");
                         txnContext.TryTransitionTo(TransactionState.Failed, "30", "Correlation failed");
-                        response = CreateErrorResponse(request, "30");
+                        response = IsoResponseBuilder.CreateErrorResponse(request, "30");
                     }
                     else await _pendingStore.MarkAsMatchedAsync(txnContext.TransactionId, response.GetField(39) ?? "96");
                 }
@@ -558,9 +554,9 @@ public class TcpSwitchServer : IDisposable
                 stopwatch.Stop();
                 int timeMs = (int)stopwatch.ElapsedMilliseconds;
 
-                if (_transactionLogger != null) _ = _transactionLogger.LogTransactionAsync(request, response, sessionId, timeMs, "COMPLETE");
+                if (_transactionLogger != null) _ = _transactionLogger.LogTransactionAsync(request, response, sessionId, timeMs, "COMPLETE").ContinueWith(t => Console.WriteLine($"[LOG-ERROR] {t.Exception?.GetBaseException().Message}"), TaskContinuationOptions.OnlyOnFaulted);
 
-                if (request.MessageType != "0800" && response.MessageType != "0810")
+                if (!MtiHelper.IsNetworkManagement(request.MessageType) && !MtiHelper.IsNetworkManagement(response.MessageType))
                 {
                     Console.WriteLine($" [{sessionId}] DONE | {request.MessageType}->{response.MessageType} | TRN: {response.GetTRN() ?? "N/A"} | RC: {response.GetField(39) ?? "96"} | {timeMs}ms");
                 }
@@ -593,15 +589,15 @@ public class TcpSwitchServer : IDisposable
 
      
      
-        private async Task<IsoMessage> HandleAuthorizationRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext)
+        private async Task<IsoMessage> HandleAuthorizationRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
             var issuerBank = GetIssuer(request, sessionId, txnContext);
-            if (issuerBank == null) return CreateErrorResponse(request, "15");
+            if (issuerBank == null) return IsoResponseBuilder.CreateErrorResponse(request, "15");
 
             PrepareMessageForRouting(request, issuerBank, sessionId);
             
             txnContext.TryTransitionTo(TransactionState.Routing);
-            return await RouteMessageAsync(request, issuerBank, sessionId, txnContext);
+            return await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
         }
 
         private IssuerBankConfig? GetIssuer(IsoMessage request, string sessionId, TransactionContext txnContext)
@@ -627,7 +623,7 @@ public class TcpSwitchServer : IDisposable
         {
             // DE#32 (Acquirer ID) & DE#33 (Forwarding ID) management
             string switchId = issuerBank.IssuerCode; 
-            string defaultAcquirer = "970418"; 
+            string defaultAcquirer = ConfigurationLoader.Instance.ServerConfig.Defaults.DefaultAcquirerId;
 
             string currentDe32 = request.GetField(32) ?? string.Empty;
             if (string.IsNullOrEmpty(currentDe32) || (currentDe32 == switchId && issuerBank.IsDefault))
@@ -645,13 +641,13 @@ public class TcpSwitchServer : IDisposable
                 request.SetIssuerID(issuerBank.IssuerCode);
             }
 
-            if (request.MessageType == "0400" || request.MessageType == "0420")
+            if (MtiHelper.IsReversal(request.MessageType))
             {
                 core.Helpers.SettlementHelper.AddSettlementAmount(request);
             }
         }
 
-        private async Task<IsoMessage> RouteMessageAsync(IsoMessage request, IssuerBankConfig issuerBank, string sessionId, TransactionContext txnContext)
+        private async Task<IsoMessage> RouteMessageAsync(IsoMessage request, IssuerBankConfig issuerBank, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
             IsoMessage? response = null;
             try 
@@ -663,23 +659,19 @@ public class TcpSwitchServer : IDisposable
                 }
                 else
                 {
-                    // Check if this is a PASSIVE issuer (we listen for them)
-                    // If so, we CANNOT dial out to them (using fallback pool), because their Host/Port is actually OURS.
                     bool isPassive = _portToIssuerCode.Values.Contains(issuerBank.IssuerCode);
 
                     if (isPassive)
                     {
                          Console.WriteLine($" [{sessionId}] [ROUTING] Passive Issuer {issuerBank.IssuerName} is NOT connected. Cannot dial out.");
-                         // Fail immediately
                          response = null;
                     }
                     else
                     {
-                        // Active Mode: We can try the fallback pool to dial out
                         if (!issuerBank.IsDefault)
                             Console.WriteLine($" [{sessionId}] [ROUTING] No active persistent connection for {issuerBank.IssuerName}, falling back to pool");
                         
-                        response = await _issuerConnector.ForwardToIssuerAsync(request, issuerBank, sessionId);
+                        response = await _issuerConnector.ForwardToIssuerAsync(request, issuerBank, sessionId, cancellationToken);
                     }
                 }
             }
@@ -691,7 +683,7 @@ public class TcpSwitchServer : IDisposable
             if (response == null)
             {
                 txnContext.TryTransitionTo(TransactionState.Failed, "91", "Issuer unavailable");
-                return CreateErrorResponse(request, "91");
+                return IsoResponseBuilder.CreateErrorResponse(request, "91");
             }
 
             return response;
@@ -700,7 +692,7 @@ public class TcpSwitchServer : IDisposable
         
         /// Handle 0400 - Reversal Request (Void/Cancel)
         
-        private async Task<IsoMessage> HandleReversalAdviceAsync(IsoMessage request, string sessionId, TransactionContext txnContext)
+        private async Task<IsoMessage> HandleReversalAdviceAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
             Console.WriteLine($" [{sessionId}] Processing reversal advice (0420)");
             
@@ -723,31 +715,32 @@ public class TcpSwitchServer : IDisposable
                     }
                 }
             }
-            
-            var response = CreateSuccessResponse(request);
-            response.MessageType = "0430";
-            
-            _ = Task.Run(async () => 
+            else if (!request.HasField(90))
             {
-                try 
+                // 13.1: pendingStore is null and DE#90 is missing - issuer may reject
+                Console.WriteLine($"  [{sessionId}] [WARN] PendingStore unavailable and DE#90 missing on 0420 - issuer may reject");
+            }
+            
+            try 
+            {
+                var issuerBank = GetIssuer(request, sessionId, txnContext);
+                if (issuerBank == null) 
                 {
-                    var issuerBank = GetIssuer(request, sessionId, txnContext);
-                    if (issuerBank == null) return;
-
-                    PrepareMessageForRouting(request, issuerBank, sessionId);
-                    await RouteMessageAsync(request, issuerBank, sessionId, txnContext);
+                     return IsoResponseBuilder.CreateErrorResponse(request, "92");
                 }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($" [{sessionId}] [BG-FWD] Error: {ex.Message}");
-                }
-            });
 
-            txnContext.TryTransitionTo(TransactionState.Reversing);
-            return response;
+                PrepareMessageForRouting(request, issuerBank, sessionId);
+                return await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($" [{sessionId}] [ISS-ERROR] Error handling reversal: {ex.Message}");
+                return IsoResponseBuilder.CreateErrorResponse(request, "96");
+            }
+
         }
 
-        private async Task<IsoMessage> HandleReversalRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext)
+        private async Task<IsoMessage> HandleReversalRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
             Console.WriteLine($" [{sessionId}] Processing reversal request");
             
@@ -761,11 +754,10 @@ public class TcpSwitchServer : IDisposable
                     {
                         Console.WriteLine($"  [{sessionId}] Original transaction not found for TRN: {trn}");
                         txnContext.TryTransitionTo(TransactionState.Reversed, "25", "Original transaction not found");
-                        return CreateErrorResponse(request, "25");
+                        return IsoResponseBuilder.CreateErrorResponse(request, "25");
                     }
                     Console.WriteLine($"  [{sessionId}] Original transaction found and verified via TRN: {trn}");
 
-                    // Build DE#90 from original if not already present
                     if (!request.HasField(90))
                     {
                         request.SetField(90, IsoMessage.BuildDE90(
@@ -777,17 +769,17 @@ public class TcpSwitchServer : IDisposable
             }
 
             var issuerBank = GetIssuer(request, sessionId, txnContext);
-            if (issuerBank == null) return CreateErrorResponse(request, "15");
+            if (issuerBank == null) return IsoResponseBuilder.CreateErrorResponse(request, "15");
 
             PrepareMessageForRouting(request, issuerBank, sessionId);
             
             txnContext.TryTransitionTo(TransactionState.Reversing);
-            var response = await RouteMessageAsync(request, issuerBank, sessionId, txnContext);
+            var response = await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
 
             if (response.GetField(39) == "00")
                 txnContext.TryTransitionTo(TransactionState.Reversed);
             else
-                txnContext.TryTransitionTo(TransactionState.Reversed);
+                txnContext.TryTransitionTo(TransactionState.Failed);
 
             return response;
         }
@@ -796,72 +788,18 @@ public class TcpSwitchServer : IDisposable
         // Network Management (0800) - Echo Test
         private IsoMessage HandleEchoRequest(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
-            // Console.WriteLine($" [{sessionId}] Processing Echo Request (0800)");
+            var response = IsoResponseBuilder.CreateSuccessResponse(request);
+            response.MessageType = MtiHelper.NetworkManagementResponse;
             
-            var response = CreateSuccessResponse(request);
-            response.MessageType = "0810";
-            
-            // Explicitly set RC 00
             response.SetField(39, "00");
             
-            // Echo back Network Management Info Code (DE70) if present
             if (request.HasField(70)) response.SetField(70, request.GetField(70));
 
             txnContext.TryTransitionTo(TransactionState.Completed);
             return response;
         }
 
-        /// <summary>
-        /// Create a successful response (Dynamic MTI)
         
-        private IsoMessage CreateSuccessResponse(IsoMessage request, bool isReversal = false)
-        {
-            var response = new IsoMessage
-            {
-                MessageType = GetResponseMTI(request.MessageType)
-            };
-
-            // Copy key fields from request
-            foreach (var field in new[] { 2, 3, 4, 7, 11, 12, 13, 32, 37, 41, 42 })
-            {
-                if (request.HasField(field))
-                    response.SetField(field, request.GetField(field));
-            }
-
-            response.SetResponseCode("00"); // Approved
-            return response;
-        }
-
-        
-        /// Create an error response with specific response code AND dynamic MTI
-        
-        private IsoMessage CreateErrorResponse(IsoMessage request, string responseCode)
-        {
-            var response = new IsoMessage
-            {
-                MessageType = GetResponseMTI(request.MessageType)
-            };
-
-            // Copy key fields
-            foreach (var field in new[] { 2, 3, 4, 7, 11, 12, 13, 32, 37, 41, 42 })
-            {
-                if (request.HasField(field))
-                    response.SetField(field, request.GetField(field));
-            }
-
-            response.SetResponseCode(responseCode);
-            return response;
-        }
-
-        private string GetResponseMTI(string requestMti)
-        {
-            // Simple logic: Request MTI + 10 (e.g. 0200->0210, 0420->0430)
-            if (int.TryParse(requestMti, out int mtiVal))
-            {
-                return (mtiVal + 10).ToString("D4");
-            }
-            return "0210"; // Fallback
-        }
 
         
         /// Mask PAN for security (show first 6 and last 4 digits only)
@@ -894,46 +832,40 @@ public class TcpSwitchServer : IDisposable
 
         private void EnsureMandatoryNapasFields(IsoMessage request, string sessionId)
         {
-            // Fields required by NAPAS for 0200/0400 transactions
-            
-            // DE22: POS Entry Mode (051 for Chip, 021 for Magstripe, 011 for Manual/NFC)
+            var defaults = ConfigurationLoader.Instance.ServerConfig.Defaults;
+
             if (!request.HasField(22))
             {
-                request.SetField(22, "011"); 
-                Console.WriteLine($" [{sessionId}] DE#22 missing, setting default: 011");
+                request.SetField(22, defaults.DefaultPOSEntryMode); 
+                Console.WriteLine($" [{sessionId}] DE#22 missing, setting default: {defaults.DefaultPOSEntryMode}");
             }
 
-            // DE25: POS Condition Code (00 for Normal)
             if (!request.HasField(25))
             {
-                request.SetField(25, "00");
-                Console.WriteLine($" [{sessionId}] DE#25 missing, setting default: 00");
+                request.SetField(25, defaults.DefaultPOSConditionCode);
+                Console.WriteLine($" [{sessionId}] DE#25 missing, setting default: {defaults.DefaultPOSConditionCode}");
             }
 
-            // DE42: Card Acceptor ID (Merchant ID)
             if (!request.HasField(42))
             {
-                request.SetField(42, "NAPAS_MERCHT_01");
-                Console.WriteLine($" [{sessionId}] DE#42 missing, setting default: NAPAS_MERCHT_01");
+                request.SetField(42, defaults.DefaultMerchantId);
+                Console.WriteLine($" [{sessionId}] DE#42 missing, setting default: {defaults.DefaultMerchantId}");
             }
 
-            // DE43: Card Acceptor Name/Location
             if (!request.HasField(43))
             {
-                request.SetField(43, "NAPAS TEST MERCHANT       HANOI        VN");
+                request.SetField(43, defaults.DefaultMerchantName);
                 Console.WriteLine($" [{sessionId}] DE#43 missing, setting default: NAPAS TEST MERCHANT");
             }
             
-            // DE49: Currency Code (704 for VND)
             if (!request.HasField(49))
             {
-                request.SetField(49, "704");
+                request.SetField(49, defaults.DefaultCurrencyCode);
             }
             
-            // DE18: Merchant Category Code
             if (!request.HasField(18))
             {
-                request.SetField(18, "6011"); // ATM/Financial
+                request.SetField(18, defaults.DefaultMerchantCategoryCode);
             }
         }
 
@@ -944,6 +876,7 @@ public class TcpSwitchServer : IDisposable
         public void Stop()
         {
             _isRunning = false;
+            _serverCts?.Cancel();
             foreach (var listener in _listeners)
             {       
                 try { listener.Stop(); } catch { }
@@ -1058,7 +991,7 @@ public class TcpSwitchServer : IDisposable
             {
                 ActiveConnections = _activeSessions.Count,
                 TotalMessageCount = _activeSessions.Values.Sum(s => s.MessageCount),
-                UptimeSince = DateTime.Now // TODO: Track actual start time
+                UptimeSince = _serverStartTime
             };
         }
 
@@ -1072,6 +1005,18 @@ public class TcpSwitchServer : IDisposable
             _disposed = true;
 
             Stop();
+
+            // 15.2: Drain active sessions before disposing issuer connections
+            var drainDeadline = DateTime.UtcNow.AddSeconds(30);
+            while (_activeSessions.Count > 0 && DateTime.UtcNow < drainDeadline)
+            {
+                Console.WriteLine($"[DISPOSE] Waiting for {_activeSessions.Count} active session(s) to drain...");
+                Thread.Sleep(1000);
+            }
+            if (_activeSessions.Count > 0)
+            {
+                Console.WriteLine($"[DISPOSE] Drain timeout: {_activeSessions.Count} session(s) still active, proceeding with shutdown");
+            }
 
             // Gracefully disconnect from all persistent issuer connections
             foreach (var manager in _issuerConnections.Values)
@@ -1091,6 +1036,7 @@ public class TcpSwitchServer : IDisposable
             _statsTimer?.Dispose();
             _poolHealthTimer?.Dispose();
             _cleanupTimer?.Dispose();
+            _serverCts?.Dispose();
             _issuerConnector?.Dispose();
             _transactionLogger?.Dispose();
             _stateMachine?.Dispose();
@@ -1124,9 +1070,15 @@ public class TcpSwitchServer : IDisposable
         {
             const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
             var result = new char[length];
+            
+            // Use cryptographically secure random number generator
+            using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
+            var randomBytes = new byte[length];
+            rng.GetBytes(randomBytes);
+            
             for (int i = 0; i < length; i++)
             {
-                result[i] = chars[Random.Shared.Next(chars.Length)];
+                result[i] = chars[randomBytes[i] % chars.Length];
             }
             return new string(result);
         }

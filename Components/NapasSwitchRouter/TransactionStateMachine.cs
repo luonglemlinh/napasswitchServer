@@ -97,6 +97,7 @@ namespace router
     public class TransactionStateMachine : IDisposable
     {
         private readonly ConcurrentDictionary<string, TransactionContext> _transactions;
+        private readonly ConcurrentDictionary<string, string> _sessionStanIndex; // "session:stan" -> transactionId
         private readonly Timer _timeoutChecker;
         private readonly TimeSpan _transactionTimeout;
         private readonly TimeSpan _staleTransactionTimeout;
@@ -108,6 +109,7 @@ namespace router
         public TransactionStateMachine(int transactionTimeoutSeconds = 30, int staleTimeoutMinutes = 5)
         {
             _transactions = new ConcurrentDictionary<string, TransactionContext>();
+            _sessionStanIndex = new ConcurrentDictionary<string, string>();
             _transactionTimeout = TimeSpan.FromSeconds(transactionTimeoutSeconds);
             _staleTransactionTimeout = TimeSpan.FromMinutes(staleTimeoutMinutes);
             
@@ -128,6 +130,11 @@ namespace router
             };
 
             _transactions.TryAdd(context.TransactionId, context);
+
+            string? stan = request.GetSTAN();
+            if (!string.IsNullOrEmpty(stan))
+                _sessionStanIndex[$"{sessionId}:{stan}"] = context.TransactionId;
+
             Console.WriteLine($"[STATE-MACHINE] Created transaction {context.TransactionId} for session {sessionId}");
             
             return context;
@@ -147,13 +154,10 @@ namespace router
         
         public TransactionContext? FindTransaction(string sessionId, string? stan)
         {
-            foreach (var kvp in _transactions)
+            if (!string.IsNullOrEmpty(stan) && _sessionStanIndex.TryGetValue($"{sessionId}:{stan}", out string? txnId))
             {
-                if (kvp.Value.SessionId == sessionId && 
-                    kvp.Value.Request?.GetSTAN() == stan)
-                {
-                    return kvp.Value;
-                }
+                _transactions.TryGetValue(txnId, out var ctx);
+                return ctx;
             }
             return null;
         }
@@ -195,6 +199,9 @@ namespace router
                     now - context.CompletedAt.Value > _staleTransactionTimeout)
                 {
                     _transactions.TryRemove(kvp.Key, out _);
+                    string? staleStan = context.Request?.GetSTAN();
+                    if (!string.IsNullOrEmpty(staleStan))
+                        _sessionStanIndex.TryRemove($"{context.SessionId}:{staleStan}", out _);
                 }
             }
         }
