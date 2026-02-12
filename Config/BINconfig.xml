@@ -42,7 +42,7 @@
       <BankCode>ACB</BankCode>
       <BankName>Asia Commercial Bank</BankName>
       <IssuerCode>970416</IssuerCode>
-      <IssuerName>Asia Commercial Bank</IssuerName>
+      <IssuerName>ACB</IssuerName>
       <Host>10.145.48.70</Host>
       <Port>2222</Port>
       <Timeout>30000</Timeout>

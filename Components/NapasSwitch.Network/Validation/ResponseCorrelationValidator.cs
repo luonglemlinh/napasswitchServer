@@ -1,4 +1,5 @@
 using System;
+using core.Helpers;
 using System.Collections.Generic;
 using core.Models;
 
@@ -145,11 +146,11 @@ namespace network.Validation
 
             if (result.IsValid)
             {
-                Console.WriteLine($"[CORRELATION] ? Response matches request - STAN: {reqStan}");
+                SwitchLogger.Info($"[CORRELATION] ? Response matches request - STAN: {reqStan}");
             }
             else
             {
-                Console.WriteLine($"[CORRELATION] ? Validation failed - STAN: {reqStan}");
+                SwitchLogger.Info($"[CORRELATION] ? Validation failed - STAN: {reqStan}");
                 Console.WriteLine(result.GetSummary());
             }
 

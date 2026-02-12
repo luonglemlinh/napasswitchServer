@@ -84,19 +84,20 @@ namespace router
                 
                 if (signOnSuccess)
                 {
+                    SwitchLogger.Info($"[TS-CONN] ISS connected: {_tsConfig.IssuerName} at {_tsConfig.Host}:{_tsConfig.Port}");
                     MessageLogger.LogConnectionEvent("TS-CONN", $"Successfully connected and signed on to {_tsConfig.IssuerName}");
                     return true;
                 }
                 else
                 {
-                    Console.WriteLine($"[TS-CONN] Sign-on failed, closing connection");
+                    SwitchLogger.Info($"[TS-CONN] Sign-on failed, closing connection");
                     Disconnect();
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TS-CONN] Connection failed: {ex.Message}");
+                SwitchLogger.Info($"[TS-CONN] Connection failed: {ex.Message}");
                 Disconnect();
                 return false;
             }
@@ -137,20 +138,22 @@ namespace router
                 
                 if (signOnSuccess)
                 {
+                    string ep = _client?.Client?.RemoteEndPoint?.ToString() ?? "Unknown";
+                    SwitchLogger.Info($"[TS-PASSIVE] ISS connected: {_tsConfig.IssuerName} from {ep} — sign-on OK");
                     MessageLogger.LogConnectionEvent("TS-PASSIVE", $"Successfully signed on to {_tsConfig.IssuerName}");
                     StartHeartbeat(); // Optional: Start heartbeat if we want to keep it alive from our side
                     return true;
                 }
                 else
                 {
-                    Console.WriteLine($"[TS-PASSIVE] Sign-on failed, closing connection");
+                    SwitchLogger.Info($"[TS-PASSIVE] Sign-on failed, closing connection");
                     Disconnect();
                     return false;
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TS-PASSIVE] Failed to attach client: {ex.Message}");
+                SwitchLogger.Info($"[TS-PASSIVE] Failed to attach client: {ex.Message}");
                 Disconnect();
                 return false;
             }
@@ -173,14 +176,14 @@ namespace router
                     int bytesRead = await NetworkStreamHelper.ReadExactAsync(_stream, lenBytes, 0, 4, token);
                     if (bytesRead == 0) 
                     {
-                        Console.WriteLine("[TS-RECV] Remote side closed connection (0 bytes read)");
+                        SwitchLogger.Info($"[TS-RECV] Remote side closed connection (0 bytes read)");
                         break; 
                     }
 
                     string lenStr = System.Text.Encoding.ASCII.GetString(lenBytes);
                     if (!int.TryParse(lenStr, out int msgLen) || msgLen <= 0 || msgLen > 9999)
                     {
-                        Console.WriteLine($"[TS-RECV] Invalid or out-of-range length header: {lenStr}");
+                        SwitchLogger.Info($"[TS-RECV] Invalid or out-of-range length header: {lenStr}");
                         break;
                     }
 
@@ -189,7 +192,7 @@ namespace router
                     bytesRead = await NetworkStreamHelper.ReadExactAsync(_stream, payload, 0, msgLen, token);
                     if (bytesRead != msgLen) 
                     {
-                        Console.WriteLine($"[TS-RECV] Connection closed mid-message (expected {msgLen}, got {bytesRead})");
+                        SwitchLogger.Info($"[TS-RECV] Connection closed mid-message (expected {msgLen}, got {bytesRead})");
                         break;
                     }
 
@@ -200,11 +203,11 @@ namespace router
             catch (OperationCanceledException) { /* Graceful shutdown */ }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TS-RECV] Error in receive loop: {ex.Message}");
+                SwitchLogger.Info($"[TS-RECV] Error in receive loop: {ex.Message}");
             }
             finally
             {
-                // Console.WriteLine("[TS-RECV] Receive loop stopped"); // Reduced noise
+                // SwitchLogger.Info($"[TS-RECV] Receive loop stopped"); // Reduced noise
                 if (!token.IsCancellationRequested) Disconnect();
             }
         }
@@ -219,7 +222,7 @@ namespace router
                 // Silence 0810 success logs; always log requests and non-00 responses
                 if (!MtiHelper.IsNetworkManagement(msg.MessageType) || (isResponse && rc != "00"))
                 {
-                    Console.WriteLine($"[TS-RECV] {msg.MessageType} | TRN: {msg.GetTRN() ?? "N/A"} | RC: {rc}");
+                    SwitchLogger.Info("[TS-RECV] {MTI} | TRN: {TRN} | RC: {RC}", msg.MessageType, msg.GetTRN() ?? "N/A", rc);
                 }
                   
                   // Full message dump for debugging (TS to Switch)
@@ -231,14 +234,14 @@ namespace router
 
                   if (rc == "30")
                  {
-                     Console.WriteLine("[TS-ALERT] Format Error (RC 30) received from TS! This often means DE32 (Acquirer ID) or DE33 (Forwarding ID) is invalid for this routing.");
+                     SwitchLogger.Info($"[TS-ALERT] Format Error (RC 30) received from ISS.");
                  }
 
                  HandleParsedMessage(msg);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TS-RECV] Failed to parse incoming message: {ex.Message}");
+                SwitchLogger.Info($"[TS-RECV] Failed to parse incoming message: {ex.Message}");
             }
         }
 
@@ -249,7 +252,7 @@ namespace router
 
             if (!MtiHelper.IsNetworkManagement(mti))
             {
-                Console.WriteLine($"[TS-RECV] Received MTI={mti} STAN={stan}");
+                SwitchLogger.Info($"[TS-RECV] Received MTI={mti} STAN={stan}");
             }
 
             if (mti == MtiHelper.NetworkManagementRequest)
@@ -266,7 +269,7 @@ namespace router
                 }
                 else
                 {
-                    Console.WriteLine($"[TS-RECV] Warning: Unmatched response received for STAN={stan}");
+                    SwitchLogger.Info($"[TS-RECV] Warning: Unmatched response received for STAN={stan}");
                 }
             }
         }
@@ -285,12 +288,12 @@ namespace router
                 // Set Response Code 00 (Success)
                 response.SetField(39, "00");
 
-                // Console.WriteLine($"[TS-AUTO] Sending Echo Response (0810) for STAN={response.Fields[11]}");
+                // SwitchLogger.Info($"[TS-AUTO] Sending Echo Response (0810) for STAN={response.Fields[11]}");
                 await SendMessageInternalAsync(response, "AUTO-ECHO", isResponse: true);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TS-AUTO] Failed to send echo response: {ex.Message}");
+                SwitchLogger.Info($"[TS-AUTO] Failed to send echo response: {ex.Message}");
             }
         }
 
@@ -324,7 +327,7 @@ namespace router
         {
             if (!IsConnected)
             {
-                Console.WriteLine($"[TS-HEARTBEAT] Connection lost, attempting reconnect...");
+                SwitchLogger.Info($"[TS-HEARTBEAT] Connection lost, attempting reconnect...");
                 await ConnectAsync();
                 return;
             }
@@ -335,13 +338,13 @@ namespace router
                 var response = await SendRequestAsync(heartbeatMsg, "HEARTBEAT");
                 if (response == null || response.GetResponseCode() != "00")
                 {
-                     Console.WriteLine($"[TS-HEARTBEAT] Failed (RC={response?.GetResponseCode() ?? "Timeout"}). Reconnecting...");
+                     SwitchLogger.Info("[TS-HEARTBEAT] Failed (RC={RC}). Reconnecting...", response?.GetResponseCode() ?? "Timeout");
                      await ReconnectAsync();
                 }
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TS-HEARTBEAT] Error: {ex.Message}");
+                SwitchLogger.Info($"[TS-HEARTBEAT] Error: {ex.Message}");
                 await ReconnectAsync();
             }
         }
@@ -404,7 +407,7 @@ namespace router
             
             // Log message before forwarding to TS
             MessageLogger.LogMessage(sessionId, "ISS forward", request);
-            Console.WriteLine($"[{sessionId}] [TS-FWD] {request.MessageType} | TRN: {request.GetTRN() ?? "N/A"}");
+            SwitchLogger.Info("[{SessionId}] [TS-FWD] {MTI} | TRN: {TRN}", sessionId, request.MessageType, request.GetTRN() ?? "N/A");
             
             try
             {
@@ -412,7 +415,7 @@ namespace router
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{sessionId}] [TS-FWD] Error: {ex.Message}");
+                SwitchLogger.Info($"[{sessionId}] [TS-FWD] Error: {ex.Message}");
                 return null;
             }
         }
@@ -441,7 +444,7 @@ namespace router
              else
              {
                  _pendingResponses.TryRemove(stan, out _);
-                 Console.WriteLine($"[{sessionId}] [TS-SEND] Timeout waiting for response (STAN={stan})");
+                 SwitchLogger.Info($"[{sessionId}] [TS-SEND] Timeout waiting for response (STAN={stan})");
                  return null;
              }
         }
@@ -463,7 +466,7 @@ namespace router
             {
                 if (!MtiHelper.IsNetworkManagement(message.MessageType))
                 {
-                    Console.WriteLine($"[{sessionId}] [TS-SEND] Sending {message.MessageType} (STAN={message.Fields.GetValueOrDefault(11)})");
+                    SwitchLogger.Info($"[{sessionId}] [TS-SEND] Sending {message.MessageType} (STAN={message.Fields.GetValueOrDefault(11)})");
                 }
                 // Note: full HEX dump removed for security; individual fields are logged in ForwardTransactionAsync
             }
@@ -488,7 +491,7 @@ namespace router
         {
             Disconnect();
             int delay = Math.Min(1000 * (1 << _reconnectAttempts), MaxReconnectDelayMs);
-            Console.WriteLine($"[TS-CONN] Reconnecting to {_tsConfig.IssuerName} in {delay}ms (attempt {_reconnectAttempts + 1})...");
+            SwitchLogger.Info($"[TS-CONN] Reconnecting to {_tsConfig.IssuerName} in {delay}ms (attempt {_reconnectAttempts + 1})...");
             await Task.Delay(delay);
             bool success = await ConnectAsync();
             if (success)
@@ -514,8 +517,8 @@ namespace router
             
             _client = null;
             _stream = null;
-            
-            Console.WriteLine($"[TS-CONN] Disconnected from {_tsConfig.IssuerName}");
+
+            SwitchLogger.Warn($"[TS-CONN] ISS disconnected: {_tsConfig.IssuerName} ({_tsConfig.IssuerCode})");
         }
 
         public async Task SignOffAndDisconnectAsync()
@@ -558,7 +561,7 @@ namespace router
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[TS-WARN] Failed to configure TCP Keep-Alive: {ex.Message}");
+                SwitchLogger.Info($"[TS-WARN] Failed to configure TCP Keep-Alive: {ex.Message}");
             }
         }
     }

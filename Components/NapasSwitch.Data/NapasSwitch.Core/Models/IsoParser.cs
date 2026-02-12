@@ -1,6 +1,8 @@
-﻿using core.Const;
+using core.Const;
+using core.Helpers;
 using core.Models;
 using System;
+using core.Helpers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text;
@@ -199,7 +201,7 @@ public class IsoParser
             {
                 // Cannot determine field length without schema definition;
                 // all subsequent field offsets would be corrupted if we continue.
-                Console.WriteLine($"[PARSER-WARN] Field DE#{fieldNum} is present in bitmap but NOT defined in schema - stopping field extraction to prevent offset corruption");
+                SwitchLogger.Info($"[PARSER-WARN] Field DE#{fieldNum} present in bitmap but NOT in schema - stopping field extraction to prevent offset corruption");
                 break;
             }
 

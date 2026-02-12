@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using core.Helpers;
 using System.Data.SqlClient;
 using System.Threading.Tasks;
 using System.IO;
@@ -36,7 +37,7 @@ namespace data
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
+                SwitchLogger.Info($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
                 core.Helpers.MessageLogger.LogMessage(sessionId, direction, response ?? request);
             }
         }
@@ -95,7 +96,7 @@ namespace data
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
+                SwitchLogger.Info($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
                 core.Helpers.MessageLogger.LogMessage(sessionId, direction, request);
             }
         }
@@ -188,7 +189,7 @@ namespace data
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERROR] Failed to get stats: {ex.Message}");
+                SwitchLogger.Info($"[ERROR] Failed to get stats: {ex.Message}");
             }
 
             return new TransactionStats();

@@ -22,6 +22,7 @@
   <Settings>
     <MaxConcurrentConnections>1000</MaxConcurrentConnections>
     <ConnectionTimeout>300000</ConnectionTimeout> <!-- 5 minutes in ms -->
+    <HealthCheckPort>8080</HealthCheckPort> <!-- HTTP health-check for load balancers -->
   </Settings>
   
   <!-- Default field values for mandatory NAPAS data elements -->

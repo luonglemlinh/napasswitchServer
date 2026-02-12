@@ -1,4 +1,5 @@
-﻿using System;
+using System;
+using core.Helpers;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -66,36 +67,36 @@ namespace core.Configuration
             if (!Directory.Exists(configDirectory))
                 throw new DirectoryNotFoundException($"Config directory not found: {configDirectory}");
 
-            Console.WriteLine($"[CONFIG] Loading configurations from: {configDirectory}");
+            SwitchLogger.Info($"[CONFIG] Loading configurations from: {configDirectory}");
 
             // Load BIN Routing
             string binConfigPath = Path.Combine(configDirectory, "BINconfig.xml");
             _binRouting = LoadXmlConfig<BinRoutingConfiguration>(binConfigPath);
             BuildBinToIssuerMap();
-            Console.WriteLine($"[CONFIG] Loaded {_binRouting.Banks.Count} issuer banks with {_binToIssuerMap.Count} total BINs");
+            SwitchLogger.Info($"[CONFIG] Loaded {_binRouting.Banks.Count} issuer banks with {_binToIssuerMap.Count} total BINs");
 
             // Load Acquirer Routing
             string acqConfigPath = Path.Combine(configDirectory, "ACQconfig.xml");
             _acquirerRouting = LoadXmlConfig<AcquirerRoutingConfiguration>(acqConfigPath);
             BuildAcquirerMap();
-            Console.WriteLine($"[CONFIG] Loaded {_acquirerRouting.Acquirers.Count} acquirer banks");
+            SwitchLogger.Info($"[CONFIG] Loaded {_acquirerRouting.Acquirers.Count} acquirer banks");
 
             // Load Response Codes
             string rcConfigPath = Path.Combine(configDirectory, "RCconfig.xml");
             _responseCodes = LoadXmlConfig<ResponseCodeConfiguration>(rcConfigPath);
             BuildResponseCodeMap();
-            Console.WriteLine($"[CONFIG] Loaded {_responseCodes.Codes.Count} response codes");
+            SwitchLogger.Info($"[CONFIG] Loaded {_responseCodes.Codes.Count} response codes");
 
             // Load Database Configuration
             string dbConfigPath = Path.Combine(configDirectory, "DBconfig.xml");
             if (File.Exists(dbConfigPath))
             {
                 _databaseConfig = LoadXmlConfig<DatabaseConfiguration>(dbConfigPath);
-                Console.WriteLine($"[CONFIG] Loaded database configuration (Logging: {_databaseConfig.EnableLogging})");
+                SwitchLogger.Info($"[CONFIG] Loaded database configuration (Logging: {_databaseConfig.EnableLogging})");
             }
             else
             {
-                Console.WriteLine($"[CONFIG] WARNING: DBconfig.xml not found, database logging disabled");
+                SwitchLogger.Info($"[CONFIG] WARNING: DBconfig.xml not found, database logging disabled");
                 _databaseConfig = new DatabaseConfiguration { EnableLogging = false };
             }
 
@@ -104,7 +105,7 @@ namespace core.Configuration
             if (!string.IsNullOrEmpty(envConnStr))
             {
                 _databaseConfig.ConnectionString = envConnStr;
-                Console.WriteLine("[CONFIG] Database connection string overridden by NAPAS_DB_CONNECTION_STRING env variable");
+                SwitchLogger.Info($"[CONFIG] Database connection string overridden by NAPAS_DB_CONNECTION_STRING env variable");
             }
 
             // Load Server Configuration (Listener Ports)
@@ -112,11 +113,11 @@ namespace core.Configuration
             if (File.Exists(serverConfigPath))
             {
                 _serverConfig = LoadXmlConfig<ServerConfiguration>(serverConfigPath);
-                Console.WriteLine($"[CONFIG] Loaded server configuration - ISS Ports: [{string.Join(", ", _serverConfig.IssuerPorts)}], ACQ Ports: [{string.Join(", ", _serverConfig.AcquirerPorts)}]");
+                SwitchLogger.Info($"[CONFIG] Loaded server configuration - ISS Ports: [{string.Join(", ", _serverConfig.IssuerPorts)}], ACQ Ports: [{string.Join(", ", _serverConfig.AcquirerPorts)}]");
             }
             else
             {
-                Console.WriteLine($"[CONFIG] WARNING: ServerConfig.xml not found, using default ports");
+                SwitchLogger.Info($"[CONFIG] WARNING: ServerConfig.xml not found, using default ports");
                 _serverConfig = new ServerConfiguration 
                 { 
                     IssuerPorts = new List<int> { 1111, 2222, 3333 },
@@ -124,7 +125,7 @@ namespace core.Configuration
                 };
             }
 
-            Console.WriteLine("[CONFIG] All configurations loaded successfully!\n");
+            SwitchLogger.Info($"[CONFIG] All configurations loaded successfully!\n");
             } // end lock
         }
 
@@ -187,13 +188,13 @@ namespace core.Configuration
 
                 if (!string.IsNullOrEmpty(envHost))
                 {
-                    Console.WriteLine($"[CONFIG] Overriding {bank.BankCode} Host: {bank.Host} -> {envHost}");
+                    SwitchLogger.Info($"[CONFIG] Overriding {bank.BankCode} Host: {bank.Host} -> {envHost}");
                     bank.Host = envHost;
                 }
 
                 if (!string.IsNullOrEmpty(envPort) && int.TryParse(envPort, out int portVal))
                 {
-                    Console.WriteLine($"[CONFIG] Overriding {bank.BankCode} Port: {bank.Port} -> {portVal}");
+                    SwitchLogger.Info($"[CONFIG] Overriding {bank.BankCode} Port: {bank.Port} -> {portVal}");
                     bank.Port = portVal;
                 }
 
@@ -201,7 +202,7 @@ namespace core.Configuration
                 if (bank.IsDefault)
                 {
                     newDefault = bank;
-                    Console.WriteLine($"[CONFIG] Default issuer set to: {bank.IssuerName} ({bank.Host}:{bank.Port})");
+                    SwitchLogger.Info($"[CONFIG] Default issuer set to: {bank.IssuerName} ({bank.Host}:{bank.Port})");
                 }
                 
                 foreach (var bin in bank.AllBins)
@@ -246,7 +247,7 @@ namespace core.Configuration
             // If no match, return the default issuer (if configured)
             if (_defaultIssuer != null)
             {
-                Console.WriteLine($"[ROUTING] No BIN match for {cardBIN}, using default: {_defaultIssuer.IssuerName}");
+                SwitchLogger.Info($"[ROUTING] No BIN match for {cardBIN}, using default: {_defaultIssuer.IssuerName}");
                 return _defaultIssuer;
             }
             

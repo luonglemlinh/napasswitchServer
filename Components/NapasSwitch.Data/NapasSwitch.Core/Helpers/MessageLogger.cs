@@ -152,7 +152,7 @@ namespace core.Helpers
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERROR] Failed to log message to file: {ex.Message}");
+                SwitchLogger.Info($"[ERROR] Failed to log message to file: {ex.Message}");
             }
         }
 

@@ -1,4 +1,5 @@
 using System;
+using core.Helpers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -80,14 +81,14 @@ namespace router
             }
 
             // Fallback: If no channel is connected, try to connect the first one and use it
-            Console.WriteLine($"[TS-MGR] [{sessionId}] No active channels, attempting emergency connect on Channel 0");
+            SwitchLogger.Info($"[TS-MGR] [{sessionId}] No active channels, attempting emergency connect on Channel 0");
             var firstChannel = _channels[0];
             if (await firstChannel.ConnectAsync())
             {
                 return await firstChannel.ForwardTransactionAsync(request, sessionId);
             }
 
-            Console.WriteLine($"[TS-MGR] [{sessionId}] Failed to find any active channel for routing");
+            SwitchLogger.Info($"[TS-MGR] [{sessionId}] Failed to find any active channel for routing");
             return null;
         }
 
