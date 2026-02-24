@@ -41,7 +41,6 @@ public class TcpSwitchServer : IDisposable
     private Timer? _poolHealthTimer;
     private Timer? _cleanupTimer;
     private CancellationTokenSource? _serverCts;
-    private HealthCheckServer? _healthCheck;
 
     // Persistent connection managers for all issuers
     private readonly ConcurrentDictionary<string, TSConnectionManager> _issuerConnections = new();
@@ -256,14 +255,6 @@ public class TcpSwitchServer : IDisposable
             Console.WriteLine($" Started at: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
             Console.WriteLine($" Configuration: {ConfigurationLoader.Instance.GetStats()}");
             Console.WriteLine("\n Waiting for client connections...\n");
-
-            // 11.3: Start health-check endpoint
-            int healthPort = ConfigurationLoader.Instance.ServerConfig.Settings.HealthCheckPort;
-            _healthCheck = new HealthCheckServer(healthPort);
-            _healthCheck.ActiveSessionsProvider = () => _activeSessions.Count;
-            _healthCheck.ConnectedIssuersProvider = () => _issuerConnections.Values.Count(c => c.IsAnyConnected);
-            _healthCheck.Start();
-            _healthCheck.IsReady = true;
         }
 
         private async Task AcceptLoopAsync(TcpListener listener, int port)
@@ -1064,7 +1055,6 @@ public class TcpSwitchServer : IDisposable
             }
             _issuerConnections.Clear();
 
-            _healthCheck?.Dispose();
             _statsTimer?.Dispose();
             _poolHealthTimer?.Dispose();
             _cleanupTimer?.Dispose();

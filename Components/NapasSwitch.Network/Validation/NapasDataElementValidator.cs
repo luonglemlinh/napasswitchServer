@@ -117,7 +117,7 @@ namespace network.Validation
                     }
                 }
 
-                SwitchLogger.Info($"[NAPAS Validator] Loaded {_dataElementDefinitions.Count} data element definitions from {filePath}");
+                SwitchLogger.Info($"Loaded {_dataElementDefinitions.Count} data element definitions");
             }
             catch (Exception ex)
             {

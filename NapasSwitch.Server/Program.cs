@@ -45,25 +45,21 @@ namespace server
                 string dbConnectionString = dbConfig.ConnectionString;
                 bool enableLogging = dbConfig.EnableLogging;
 
-                SwitchLogger.Info("Database logging: {EnableLogging}", enableLogging ? "ENABLED" : "DISABLED");
-
                 // Step 3: Test database connection if logging is enabled
                 if (enableLogging)
                 {
-                    SwitchLogger.Info("Testing database connection...");
-
                     if (TestDatabaseConnection(dbConnectionString))
                     {
-                        SwitchLogger.Info("Database connection successful");
+                        SwitchLogger.Info("Database connection verified (logging: ENABLED)");
                     }
                     else
                     {
                         SwitchLogger.Warn("Database connection failed");
                         Console.WriteLine("[WARNING] Press 'C' to continue without logging, or any other key to exit");
-                        
+
                         var key = Console.ReadKey();
                         Console.WriteLine();
-                        
+
                         if (key.Key != ConsoleKey.C)
                         {
                             SwitchLogger.Info("Startup cancelled");
@@ -75,13 +71,16 @@ namespace server
                         SwitchLogger.Info("Continuing without database logging");
                     }
                 }
+                else
+                {
+                    SwitchLogger.Info("Database logging: DISABLED");
+                }
 
                 // Step 4: Create and start the server
                 // Load ports from ServerConfig.xml instead of hardcoding
                 var serverConfig = ConfigurationLoader.Instance.ServerConfig;
                 int[] ports = serverConfig.GetAllPorts();
                 
-                SwitchLogger.Info("Listening on {PortCount} ports: {Ports}", ports.Length, string.Join(", ", ports));
                 using var server = new TcpSwitchServer(ports, dbConnectionString, enableLogging);
 
                 Console.WriteLine("\n[READY] Press ENTER to start the server, or 'Q' to quit...");
@@ -189,7 +188,6 @@ namespace server
                         return false;
                     }
 
-                    SwitchLogger.Info($"[DB-TEST] Connection successful, TransactionLog table verified");
                     return true;
                 }
             }

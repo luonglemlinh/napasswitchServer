@@ -67,7 +67,7 @@ namespace core.Configuration
             if (!Directory.Exists(configDirectory))
                 throw new DirectoryNotFoundException($"Config directory not found: {configDirectory}");
 
-            SwitchLogger.Info($"[CONFIG] Loading configurations from: {configDirectory}");
+            SwitchLogger.Info($"[CONFIG] Loading configurations from: {Path.GetFileName(configDirectory)}/");
 
             // Load BIN Routing
             string binConfigPath = Path.Combine(configDirectory, "BINconfig.xml");
