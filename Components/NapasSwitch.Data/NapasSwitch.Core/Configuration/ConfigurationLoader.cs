@@ -125,7 +125,7 @@ namespace core.Configuration
                 };
             }
 
-            SwitchLogger.Info($"[CONFIG] All configurations loaded successfully!\n");
+            SwitchLogger.Info($"[CONFIG] All configurations loaded");
             } // end lock
         }
 

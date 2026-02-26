@@ -35,6 +35,11 @@ namespace router
         public bool IsConnected => _isConnected && _client?.Connected == true;
         public string TSName => _tsConfig.IssuerName;
 
+        /// <summary>
+        /// Fired when connection state changes. Args: (issuerName, isConnected)
+        /// </summary>
+        public event Action<string, bool>? OnConnectionChanged;
+
         public TSPersistentConnection(IssuerBankConfig tsConfig, int heartbeatIntervalMs = 75000)
         {
             _tsConfig = tsConfig ?? throw new ArgumentNullException(nameof(tsConfig));

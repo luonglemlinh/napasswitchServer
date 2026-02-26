@@ -78,6 +78,7 @@ public class TcpSwitchServer : IDisposable
 
         string configPath = FindValidationConfigPath();
         _validator = new NapasDataElementValidator(configPath);
+        SwitchLogger.Info($"[INIT] Validation config loaded: {Path.GetFileName(configPath)}");
 
         InitializeTSConnection();
 
@@ -127,6 +128,7 @@ public class TcpSwitchServer : IDisposable
 
                 // Still create the manager, but it won't dial out. It waits for AttachClient.
                 var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
+                manager.OnConnectionChanged += LogH2HSummary;
                 _issuerConnections[issuer.IssuerCode] = manager;
             }
             else
@@ -134,6 +136,7 @@ public class TcpSwitchServer : IDisposable
                 // Active Mode: We dial out to them
                 active.Add($"{issuer.IssuerName}->{issuer.Host}:{issuer.Port}");
                 var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
+                manager.OnConnectionChanged += LogH2HSummary;
                 _issuerConnections[issuer.IssuerCode] = manager;
             }
         }
@@ -175,7 +178,6 @@ public class TcpSwitchServer : IDisposable
                 var fullPath = Path.GetFullPath(path);
                 if (File.Exists(fullPath))
                 {
-                    SwitchLogger.Info($"[INIT] Validation config loaded: {Path.GetFileName(fullPath)}");
                     return fullPath;
                 }
             }
@@ -219,6 +221,18 @@ public class TcpSwitchServer : IDisposable
         private void OnReversalRequired(TransactionContext context)
         {
             SwitchLogger.Warn($"[REVERSAL] Auto-reversal required for transaction {context.TransactionId}");
+        }
+
+        /// <summary>
+        /// Print a compact one-line H2H status summary. Called on every connect/disconnect event.
+        /// </summary>
+        private void LogH2HSummary()
+        {
+            var parts = _issuerConnections.Values
+                .Select(m => $"{m.TSName}:{(m.IsAnyConnected ? "OK" : "--")}")
+                .ToList();
+            int connected = _issuerConnections.Values.Count(m => m.IsAnyConnected);
+            SwitchLogger.Info($"[H2H] {string.Join(" | ", parts)}  ({connected}/{_issuerConnections.Count} connected)");
         }
 
         
@@ -354,11 +368,7 @@ public class TcpSwitchServer : IDisposable
 
                 _activeSessions.TryAdd(sessionId, session);
 
-                SwitchLogger.Info($" [{sessionId}] Client connected from {clientEndpoint}");
-                
-                // Log stats on connection join
-                LogServerStats(null);
-                LogPoolHealth(null);
+                SwitchLogger.Debug($"[{sessionId}] ACQ connected from {clientEndpoint}");
 
                 // Set timeouts (30 seconds)
                 stream.ReadTimeout = 30000;
@@ -450,13 +460,13 @@ public class TcpSwitchServer : IDisposable
                 // Cleanup
                 stream?.Close();
                 client?.Close();
-                _activeSessions.TryRemove(sessionId, out _);
+                _activeSessions.TryRemove(sessionId, out var ended);
+                int msgCount = ended?.MessageCount ?? 0;
 
-                SwitchLogger.Info($" [{sessionId}] Client disconnected. Active sessions: {_activeSessions.Count}\n");
-                
-                // Log stats on connection disconnect
-                LogServerStats(null);
-                LogPoolHealth(null);
+                if (msgCount > 0)
+                    SwitchLogger.Info($"[{sessionId}] ACQ disconnected | msgs={msgCount} | active={_activeSessions.Count}");
+                else
+                    SwitchLogger.Debug($"[{sessionId}] ACQ disconnected (no messages) | active={_activeSessions.Count}");
             }
         }
 

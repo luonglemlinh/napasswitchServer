@@ -24,6 +24,11 @@ namespace router
         public int ConnectedCount => _channels.Count(c => c.IsConnected);
         public string TSName => _tsConfig.IssuerName;
 
+        /// <summary>
+        /// Fired when any channel's connection state changes.
+        /// </summary>
+        public event Action? OnConnectionChanged;
+
         public TSConnectionManager(IssuerBankConfig tsConfig, int channelCount = 1, int heartbeatIntervalMs = 75000)
         {
             _tsConfig = tsConfig ?? throw new ArgumentNullException(nameof(tsConfig));
@@ -33,6 +38,7 @@ namespace router
             for (int i = 0; i < _channelCount; i++)
             {
                 var channel = new TSPersistentConnection(tsConfig, heartbeatIntervalMs);
+                channel.OnConnectionChanged += (_, __) => OnConnectionChanged?.Invoke();
                 _channels.Add(channel);
             }
         }

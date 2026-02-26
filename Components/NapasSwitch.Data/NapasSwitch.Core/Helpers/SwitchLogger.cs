@@ -1,5 +1,6 @@
 using Serilog;
 using Serilog.Events;
+using Serilog.Formatting.Compact;
 using System.IO;
 
 namespace core.Helpers
@@ -8,6 +9,11 @@ namespace core.Helpers
     /// Centralized structured logging facade for the NAPAS Switch.
     /// Replaces raw Console.WriteLine with Serilog structured logging.
     /// All projects reference this via NapasSwitch.Data.
+    ///
+    /// Production outputs:
+    ///   Console  → human-readable (for operators)
+    ///   .log     → human-readable rolling file (for quick grep)
+    ///   .json    → compact JSON rolling file (for ELK/Seq/Splunk ingestion)
     /// </summary>
     public static class SwitchLogger
     {
@@ -31,23 +37,34 @@ namespace core.Helpers
             if (!Directory.Exists(logDir))
                 Directory.CreateDirectory(logDir);
 
-            string logFilePath = Path.Combine(logDir, "switch-.log");
+            string textLogPath = Path.Combine(logDir, "switch-.log");
+            string jsonLogPath = Path.Combine(logDir, "switch-.json");
 
             _logger = new LoggerConfiguration()
-                .MinimumLevel.Debug()
+                .MinimumLevel.Information()
+                .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
                 .Enrich.FromLogContext()
+                // Console: human-readable for operators
                 .WriteTo.Console(
                     outputTemplate: "{Timestamp:HH:mm:ss.fff} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+                // Text file: human-readable for quick grep/tail
                 .WriteTo.File(
-                    logFilePath,
+                    textLogPath,
                     rollingInterval: RollingInterval.Day,
                     retainedFileCountLimit: 30,
                     fileSizeLimitBytes: 50 * 1024 * 1024,
                     outputTemplate: "{Timestamp:yyyy-MM-dd HH:mm:ss.fff zzz} [{Level:u3}] {Message:lj}{NewLine}{Exception}")
+                // JSON file: machine-parseable for ELK/Seq/Splunk
+                .WriteTo.File(
+                    new CompactJsonFormatter(),
+                    jsonLogPath,
+                    rollingInterval: RollingInterval.Day,
+                    retainedFileCountLimit: 30,
+                    fileSizeLimitBytes: 50 * 1024 * 1024)
                 .CreateLogger();
 
             _initialized = true;
-            _logger.Information("Structured logging initialized. LogDir={LogDir}", logDir);
+            _logger.Information("Structured logging initialized. LogDir={LogDir}", Path.GetFileName(logDir));
         }
 
         // ---- Thin wrappers that mirror Console.WriteLine patterns ----

@@ -117,7 +117,7 @@ namespace network.Validation
                     }
                 }
 
-                SwitchLogger.Info($"Loaded {_dataElementDefinitions.Count} data element definitions");
+                SwitchLogger.Debug($"[INIT] Parsed {_dataElementDefinitions.Count} data element definitions from validation config");
             }
             catch (Exception ex)
             {
