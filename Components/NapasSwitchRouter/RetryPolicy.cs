@@ -5,9 +5,9 @@ using System.Threading.Tasks;
 
 namespace router
 {
-    
+
     /// Retry policy with exponential backoff for network operations
-    
+
     public class RetryPolicy
     {
         private readonly int _maxRetries;
@@ -23,43 +23,9 @@ namespace router
             _backoffMultiplier = backoffMultiplier;
         }
 
-        
-        /// Execute an action with retry and exponential backoff
-        
-        public T Execute<T>(Func<T> action, Func<Exception, bool> shouldRetry, string operationName)
-        {
-            int attempt = 0;
-            Exception? lastException = null;
 
-            while (attempt <= _maxRetries)
-            {
-                try
-                {
-                    return action();
-                }
-                catch (Exception ex)
-                {
-                    lastException = ex;
-                    attempt++;
-
-                    if (attempt > _maxRetries || !shouldRetry(ex))
-                    {
-                        SwitchLogger.Info($"[RETRY] {operationName} failed after {attempt} attempts: {ex.Message}");
-                        throw;
-                    }
-
-                    int delay = CalculateDelay(attempt);
-                    SwitchLogger.Info($"[RETRY] {operationName} attempt {attempt} failed: {ex.Message}. Retrying in {delay}ms...");
-                    Thread.Sleep(delay);
-                }
-            }
-
-            throw lastException ?? new InvalidOperationException("Retry failed");
-        }
-
-        
         /// Execute an async action with retry and exponential backoff
-        
+
         public async Task<T> ExecuteAsync<T>(Func<Task<T>> action, Func<Exception, bool> shouldRetry, string operationName, CancellationToken cancellationToken = default)
         {
             int attempt = 0;

@@ -29,14 +29,16 @@ namespace router
             _retryPolicy = new RetryPolicy(maxRetries: 3, baseDelayMs: 100, maxDelayMs: 5000);
         }
 
-        
+
         /// Forward a message to the appropriate Issuer bank and wait for response
         /// Uses connection pooling and retry with exponential backoff
-        
+        /// NOTE: Use ForwardToIssuerAsync instead - this sync wrapper is deprecated and may cause deadlocks
+
+        [Obsolete("Use ForwardToIssuerAsync instead. This sync wrapper can cause deadlocks.")]
         public IsoMessage ForwardToIssuer(IsoMessage request, IssuerBankConfig issuerBank, string sessionId)
         {
-            // Sync wrapper for backward compatibility
-            return ForwardToIssuerAsync(request, issuerBank, sessionId).GetAwaiter().GetResult();
+            // Removed sync-over-async anti-pattern. Callers should use ForwardToIssuerAsync.
+            throw new NotSupportedException("Use ForwardToIssuerAsync instead. Sync-over-async has been removed to prevent deadlocks.");
         }
 
         public async Task<IsoMessage> ForwardToIssuerAsync(IsoMessage request, IssuerBankConfig issuerBank, string sessionId, CancellationToken cancellationToken = default)

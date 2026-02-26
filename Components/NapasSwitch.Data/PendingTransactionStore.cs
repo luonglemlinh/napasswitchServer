@@ -1,6 +1,7 @@
 using System;
 using core.Helpers;
-using System.Data.SqlClient;
+using core.Security;
+using Microsoft.Data.SqlClient;
 using System.Threading.Tasks;
 using core.Models;
 
@@ -10,6 +11,7 @@ namespace data
     {
         private readonly string _connectionString;
         private readonly int _expirationMinutes;
+        private readonly SecureDataHandler? _secureDataHandler;
         private static readonly TimeZoneInfo VietnamTimeZone = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
 
         /// <summary>
@@ -17,10 +19,11 @@ namespace data
         /// </summary>
         private static DateTime GetVietnamTime() => TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, VietnamTimeZone);
 
-        public PendingTransactionStore(string connectionString, int expirationMinutes = 5)
+        public PendingTransactionStore(string connectionString, int expirationMinutes = 5, SecureDataHandler? secureDataHandler = null)
         {
             _connectionString = connectionString;
             _expirationMinutes = expirationMinutes;
+            _secureDataHandler = secureDataHandler;
         }
 
         public async Task<string> StoreRequestAsync(string transactionId, string sessionId, IsoMessage request, byte[] messageBytes)
@@ -44,7 +47,14 @@ namespace data
             command.Parameters.AddWithValue("@TransactionId", transactionId);
             command.Parameters.AddWithValue("@SessionId", sessionId);
             command.Parameters.AddWithValue("@MessageType", request.MessageType);
-            command.Parameters.AddWithValue("@PAN", request.GetField(2) ?? (object)DBNull.Value);
+
+            // PCI-DSS: Encrypt PAN before storing in database
+            string? pan = request.GetField(2);
+            if (!string.IsNullOrEmpty(pan) && _secureDataHandler != null)
+            {
+                pan = _secureDataHandler.EncryptPAN(pan);
+            }
+            command.Parameters.AddWithValue("@PAN", pan ?? (object)DBNull.Value);
             
             decimal amount = 0;
             if (decimal.TryParse(request.GetField(4) ?? "0", out decimal parsedAmount))

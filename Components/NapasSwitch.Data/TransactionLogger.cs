@@ -1,6 +1,6 @@
 using System;
 using core.Helpers;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Threading.Tasks;
 using System.IO;
 using core.Models;

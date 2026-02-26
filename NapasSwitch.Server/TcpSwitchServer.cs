@@ -16,7 +16,7 @@ using core.Helpers;
 using network.Validation;
 using router;
 using data;
-using System.Data.SqlClient;
+using Microsoft.Data.SqlClient;
 using System.Collections.Generic;
 
 namespace server
@@ -54,13 +54,13 @@ public class TcpSwitchServer : IDisposable
     private readonly NapasDataElementValidator _validator;
 
     // Keep single-port constructor
-    public TcpSwitchServer(int port = 1111, string dbConnectionString = "", bool enableLogging = true)
-        : this(new[] { port }, dbConnectionString, enableLogging)
+    public TcpSwitchServer(int port = 1111, string dbConnectionString = "", bool enableLogging = true, IHsmProvider? hsmProvider = null)
+        : this(new[] { port }, dbConnectionString, enableLogging, hsmProvider)
     {
     }
 
     // New multi-port constructor
-    public TcpSwitchServer(int[] ports, string dbConnectionString = "", bool enableLogging = true)
+    public TcpSwitchServer(int[] ports, string dbConnectionString = "", bool enableLogging = true, IHsmProvider? hsmProvider = null)
     {
         _serverStartTime = DateTime.UtcNow;
         _ports = ports.Distinct().Where(p => p > 0).ToList();
@@ -70,7 +70,14 @@ public class TcpSwitchServer : IDisposable
         _issuerConnector = new IssuerConnector();
         _activeSessions = new ConcurrentDictionary<string, ClientSession>();
         _stateMachine = new TransactionStateMachine(transactionTimeoutSeconds: 30);
-        _securityProvider = new SecureDataHandler(new SoftwareHsmStub());
+
+        // Use injected HSM provider or fall back to software stub (with warning)
+        if (hsmProvider == null)
+        {
+            SwitchLogger.Warn("[SECURITY] No HSM provider injected - using SoftwareHsmStub. NOT FOR PRODUCTION!");
+            hsmProvider = new SoftwareHsmStub();
+        }
+        _securityProvider = new SecureDataHandler(hsmProvider);
         _correlationValidator = new ResponseCorrelationValidator();
 
         _stateMachine.OnTransactionTimeout += OnTransactionTimeout;
@@ -85,7 +92,7 @@ public class TcpSwitchServer : IDisposable
         if (enableLogging && !string.IsNullOrEmpty(dbConnectionString))
         {
             _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging);
-            _pendingStore = new PendingTransactionStore(dbConnectionString, expirationMinutes: 5);
+            _pendingStore = new PendingTransactionStore(dbConnectionString, expirationMinutes: 5, _securityProvider);
             SwitchLogger.Info($"[INIT] Transaction logger and pending store initialized");
         }
         else
@@ -721,13 +728,13 @@ public class TcpSwitchServer : IDisposable
             return response;
         }
 
-        
+
         /// Handle 0400 - Reversal Request (Void/Cancel)
-        
+
         private async Task<IsoMessage> HandleReversalAdviceAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
             SwitchLogger.Info($" [{sessionId}] Processing reversal advice (0420)");
-            
+
             if (_pendingStore != null)
             {
                 string? trn = request.GetTRN();
@@ -747,12 +754,16 @@ public class TcpSwitchServer : IDisposable
                     }
                 }
             }
-            else if (!request.HasField(90))
+
+            // PCI-DSS/NAPAS compliance: Reject reversal advice without DE#90
+            // NAPAS will reject with RC 30 anyway, so decline early with RC 25
+            if (!request.HasField(90))
             {
-                // 13.1: pendingStore is null and DE#90 is missing - issuer may reject
-                SwitchLogger.Debug($"  [{sessionId}] [WARN] PendingStore unavailable and DE#90 missing on 0420 - issuer may reject");
+                SwitchLogger.Warn($"  [{sessionId}] [REJECT] DE#90 missing on 0420 reversal advice - declining with RC 25");
+                txnContext.TryTransitionTo(TransactionState.Failed, "25", "Original transaction data missing (DE#90)");
+                return IsoResponseBuilder.CreateErrorResponse(request, "25");
             }
-            
+
             try 
             {
                 var issuerBank = GetIssuer(request, sessionId, txnContext);
@@ -1102,15 +1113,12 @@ public class TcpSwitchServer : IDisposable
         {
             const string chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
             var result = new char[length];
-            
+
             // Use cryptographically secure random number generator
-            using var rng = System.Security.Cryptography.RandomNumberGenerator.Create();
-            var randomBytes = new byte[length];
-            rng.GetBytes(randomBytes);
-            
+            // Using GetInt32 to avoid modulo bias (62 doesn't divide 256 evenly)
             for (int i = 0; i < length; i++)
             {
-                result[i] = chars[randomBytes[i] % chars.Length];
+                result[i] = chars[System.Security.Cryptography.RandomNumberGenerator.GetInt32(0, chars.Length)];
             }
             return new string(result);
         }

@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using core.Helpers;
 using System.Collections.Concurrent;
 using System.Threading;
@@ -6,10 +7,10 @@ using core.Models;
 
 namespace router
 {
-    
+
     /// Transaction states in the switch processing lifecycle
     /// Simplified for clarity: RECEIVED ? ROUTING ? COMPLETED/FAILED/REVERSING ? REVERSED
-    
+
     public enum TransactionState
     {
         // Core states - simpler mental model for new developers
@@ -17,15 +18,15 @@ namespace router
         Routing,            // Validated and being routed (combines Validated + AwaitingResponse)
         Completed,          // Finished successfully
         Failed,             // Processing failed (any error)
-        
+
         // Reversal states  
         Reversing,          // Reversal in progress (combines ReversalRequired + ReversalPending)
         Reversed            // Reversal completed or failed
     }
 
-    
+
     /// Transaction context containing all state information
-    
+
     public class TransactionContext
     {
         public string TransactionId { get; set; } = string.Empty;
@@ -38,6 +39,7 @@ namespace router
         public DateTime CreatedAt { get; set; }
         public DateTime? SentToIssuerAt { get; set; }
         public DateTime? CompletedAt { get; set; }
+        public DateTime ExpiresAt { get; set; }
         public int RetryCount { get; set; }
         public string? ErrorCode { get; set; }
         public string? ErrorMessage { get; set; }
@@ -51,9 +53,9 @@ namespace router
             CreatedAt = DateTime.UtcNow;
         }
 
-        
+
         /// Transition to a new state with validation
-        
+
         public bool TryTransitionTo(TransactionState newState, string? errorCode = null, string? errorMessage = null)
         {
             lock (_lock)
@@ -91,10 +93,11 @@ namespace router
         }
     }
 
-    
+
     /// Transaction state machine manager
     /// Tracks all active transactions and handles timeouts/reversals
-    
+    /// Uses PriorityQueue for O(log n) timeout checking instead of O(n) iteration
+
     public class TransactionStateMachine : IDisposable
     {
         private readonly ConcurrentDictionary<string, TransactionContext> _transactions;
@@ -104,6 +107,10 @@ namespace router
         private readonly TimeSpan _staleTransactionTimeout;
         private bool _disposed;
 
+        // PriorityQueue for efficient timeout checking - orders by expiry time
+        private readonly PriorityQueue<string, DateTime> _expiryQueue;
+        private readonly object _queueLock = new();
+
         public event Action<TransactionContext>? OnTransactionTimeout;
         public event Action<TransactionContext>? OnReversalRequired;
 
@@ -111,23 +118,26 @@ namespace router
         {
             _transactions = new ConcurrentDictionary<string, TransactionContext>();
             _sessionStanIndex = new ConcurrentDictionary<string, string>();
+            _expiryQueue = new PriorityQueue<string, DateTime>();
             _transactionTimeout = TimeSpan.FromSeconds(transactionTimeoutSeconds);
             _staleTransactionTimeout = TimeSpan.FromMinutes(staleTimeoutMinutes);
-            
+
             // Check for timeouts every second
             _timeoutChecker = new Timer(CheckTimeouts, null, 1000, 1000);
         }
 
-        
+
         /// Create a new transaction context
-        
+
         public TransactionContext CreateTransaction(string sessionId, IsoMessage request)
         {
+            var now = DateTime.UtcNow;
             var context = new TransactionContext
             {
                 TransactionId = GenerateTransactionId(),
                 SessionId = sessionId,
-                Request = request
+                Request = request,
+                ExpiresAt = now.Add(_transactionTimeout)
             };
 
             _transactions.TryAdd(context.TransactionId, context);
@@ -136,23 +146,29 @@ namespace router
             if (!string.IsNullOrEmpty(stan))
                 _sessionStanIndex[$"{sessionId}:{stan}"] = context.TransactionId;
 
+            // Add to priority queue for timeout tracking
+            lock (_queueLock)
+            {
+                _expiryQueue.Enqueue(context.TransactionId, context.ExpiresAt);
+            }
+
             SwitchLogger.Info($"[STATE-MACHINE] Created transaction {context.TransactionId} for session {sessionId}");
-            
+
             return context;
         }
 
-        
+
         /// Get transaction context by ID
-        
+
         public TransactionContext? GetTransaction(string transactionId)
         {
             _transactions.TryGetValue(transactionId, out var context);
             return context;
         }
 
-        
+
         /// Find transaction by session and STAN
-        
+
         public TransactionContext? FindTransaction(string sessionId, string? stan)
         {
             if (!string.IsNullOrEmpty(stan) && _sessionStanIndex.TryGetValue($"{sessionId}:{stan}", out string? txnId))
@@ -163,9 +179,9 @@ namespace router
             return null;
         }
 
-        
+
         /// Remove completed transaction from tracking
-        
+
         public void CompleteTransaction(string transactionId)
         {
             if (_transactions.TryRemove(transactionId, out var context))
@@ -174,32 +190,55 @@ namespace router
             }
         }
 
-        
-        /// Check for timed out transactions
-        
+
+        /// Check for timed out transactions using PriorityQueue for O(1) head check
+
         private void CheckTimeouts(object? state)
         {
             var now = DateTime.UtcNow;
+            var toCleanup = new List<string>();
 
-            foreach (var kvp in _transactions)
+            lock (_queueLock)
             {
-                var context = kvp.Value;
-
-                if (context.State == TransactionState.Routing)
+                // Process expired transactions from the head of the queue
+                while (_expiryQueue.TryPeek(out var txnId, out var expiresAt))
                 {
-                    if (context.SentToIssuerAt.HasValue && 
-                        now - context.SentToIssuerAt.Value > _transactionTimeout)
+                    if (expiresAt > now)
                     {
-                        HandleTimeout(context);
+                        // No more expired transactions
+                        break;
+                    }
+
+                    _expiryQueue.Dequeue();
+
+                    if (_transactions.TryGetValue(txnId, out var context))
+                    {
+                        if (context.State == TransactionState.Routing)
+                        {
+                            HandleTimeout(context);
+                        }
+                        else if (context.IsTerminalState() && context.CompletedAt.HasValue)
+                        {
+                            // Re-enqueue for stale cleanup check
+                            var staleExpiry = context.CompletedAt.Value.Add(_staleTransactionTimeout);
+                            if (now >= staleExpiry)
+                            {
+                                toCleanup.Add(txnId);
+                            }
+                            else
+                            {
+                                _expiryQueue.Enqueue(txnId, staleExpiry);
+                            }
+                        }
                     }
                 }
+            }
 
-                // Clean up stale completed/failed transactions
-                if (context.IsTerminalState() && 
-                    context.CompletedAt.HasValue &&
-                    now - context.CompletedAt.Value > _staleTransactionTimeout)
+            // Clean up stale transactions outside the lock
+            foreach (var txnId in toCleanup)
+            {
+                if (_transactions.TryRemove(txnId, out var context))
                 {
-                    _transactions.TryRemove(kvp.Key, out _);
                     string? staleStan = context.Request?.GetSTAN();
                     if (!string.IsNullOrEmpty(staleStan))
                         _sessionStanIndex.TryRemove($"{context.SessionId}:{staleStan}", out _);
