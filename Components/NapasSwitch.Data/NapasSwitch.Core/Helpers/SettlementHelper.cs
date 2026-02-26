@@ -1,4 +1,5 @@
 using System;
+using core.Helpers;
 using core.Models;
 
 namespace core.Helpers
@@ -40,7 +41,7 @@ namespace core.Helpers
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[SETTLEMENT-HELPER] Error calculating Settlement Amount: {ex.Message}");
+                    SwitchLogger.Info($"[SETTLEMENT-HELPER] Error calculating Settlement Amount: {ex.Message}");
                 }
             }
         }

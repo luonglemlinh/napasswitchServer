@@ -1,6 +1,7 @@
 using System;
 using System.Security.Cryptography;
 using System.Text;
+using core.Helpers;
 
 namespace core.Security
 {
@@ -71,7 +72,7 @@ namespace core.Security
             _keys["MAC_KEY"] = GenerateRandomKey(32);
             _keys["DATA_KEY"] = GenerateRandomKey(32);
             
-            Console.WriteLine("[HSM-STUB] WARNING: Using software HSM stub - NOT FOR PRODUCTION!");
+            SwitchLogger.Warn("[HSM] Using software HSM stub — NOT FOR PRODUCTION");
         }
 
         public byte[] EncryptPinBlock(byte[] clearPinBlock, string keyId)

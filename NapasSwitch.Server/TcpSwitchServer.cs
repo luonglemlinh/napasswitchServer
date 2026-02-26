@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO;
@@ -78,6 +78,7 @@ public class TcpSwitchServer : IDisposable
 
         string configPath = FindValidationConfigPath();
         _validator = new NapasDataElementValidator(configPath);
+        SwitchLogger.Info($"[INIT] Validation config loaded: {Path.GetFileName(configPath)}");
 
         InitializeTSConnection();
 
@@ -85,13 +86,13 @@ public class TcpSwitchServer : IDisposable
         {
             _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging);
             _pendingStore = new PendingTransactionStore(dbConnectionString, expirationMinutes: 5);
-            Console.WriteLine("[INIT] Transaction logger and pending store initialized");
+            SwitchLogger.Info($"[INIT] Transaction logger and pending store initialized");
         }
         else
         {
             _transactionLogger = null;
             _pendingStore = null;
-            Console.WriteLine("[INIT] Transaction logger disabled");
+            SwitchLogger.Info($"[INIT] Transaction logger disabled");
         }
 
         StartBackgroundMonitoring();
@@ -103,12 +104,16 @@ public class TcpSwitchServer : IDisposable
     private void InitializeTSConnection()
     {
         var allIssuers = ConfigurationLoader.Instance.GetAllIssuers();
+        var passive = new List<string>();
+        var active = new List<string>();
+        var skipped = new List<string>();
+
         foreach (var issuer in allIssuers)
         {
             // Skip if host or port is missing
             if (string.IsNullOrWhiteSpace(issuer.Host) || issuer.Port <= 0)
             {
-                Console.WriteLine($"[INIT] Skipping connection for {issuer.IssuerName} (No Host/Port)");
+                skipped.Add(issuer.IssuerName);
                 continue;
             }
 
@@ -116,32 +121,30 @@ public class TcpSwitchServer : IDisposable
             // we treat it as an INBOUND connection (Passive Mode).
             if (_ports.Contains(issuer.Port))
             {
-                Console.WriteLine($"[INIT] configured as PASSIVE connection for {issuer.IssuerName} on port {issuer.Port} (We Listen)");
-                
+                passive.Add($"{issuer.IssuerName}:{issuer.Port}");
+
                 // Map the port to this issuer so HandleClient knows who it is
                 _portToIssuerCode[issuer.Port] = issuer.IssuerCode;
-                
+
                 // Still create the manager, but it won't dial out. It waits for AttachClient.
                 var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
+                manager.OnConnectionChanged += LogH2HSummary;
                 _issuerConnections[issuer.IssuerCode] = manager;
             }
             else
             {
                 // Active Mode: We dial out to them
-                Console.WriteLine($"[INIT] configured as ACTIVE connection for {issuer.IssuerName} at {issuer.Host}:{issuer.Port} (We Dial)");
+                active.Add($"{issuer.IssuerName}->{issuer.Host}:{issuer.Port}");
                 var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
+                manager.OnConnectionChanged += LogH2HSummary;
                 _issuerConnections[issuer.IssuerCode] = manager;
             }
         }
-        
-        if (_issuerConnections.IsEmpty)
-        {
-            Console.WriteLine("[INIT] No issuers configured for connections");
-        }
-        else
-        {
-            Console.WriteLine($"[INIT] {_issuerConnections.Count} connection managers initialized");
-        }
+
+        SwitchLogger.Info($"[INIT] Issuer connections: {_issuerConnections.Count} ready (passive={passive.Count}, active={active.Count}, skipped={skipped.Count})");
+        if (passive.Count > 0) SwitchLogger.Debug($"[INIT] Passive: {string.Join(", ", passive)}");
+        if (active.Count > 0)  SwitchLogger.Debug($"[INIT] Active: {string.Join(", ", active)}");
+        if (skipped.Count > 0) SwitchLogger.Debug($"[INIT] Skipped: {string.Join(", ", skipped)}");
     }
 
     /// <summary>
@@ -175,7 +178,6 @@ public class TcpSwitchServer : IDisposable
                 var fullPath = Path.GetFullPath(path);
                 if (File.Exists(fullPath))
                 {
-                    Console.WriteLine($"[INIT] Found validation config at: {fullPath}");
                     return fullPath;
                 }
             }
@@ -196,31 +198,41 @@ public class TcpSwitchServer : IDisposable
                 _cleanupTimer = new Timer(async _ => await _pendingStore.CleanupExpiredAsync(), 
                     null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
             }
-            
-            Console.WriteLine("[MONITORING] Event-driven stats logging enabled (on connect/disconnect)");
         }
         
         private void LogServerStats(object? state)
         {
             var stats = GetStats();
-            Console.WriteLine($"[STATS] Active: {stats.ActiveConnections} | Total Msgs: {stats.TotalMessageCount}");
+            SwitchLogger.Debug($"[STATS] Active: {stats.ActiveConnections} | Total Msgs: {stats.TotalMessageCount}");
         }
         
         private void LogPoolHealth(object? state)
         {
             var poolStats = _issuerConnector.GetPoolStats();
             int persistentConnected = _issuerConnections.Values.Count(c => c.IsAnyConnected);
-            Console.WriteLine($"[POOL] Total: {poolStats.TotalPooledConnections} | Active: {poolStats.TotalActivedConnections} | H2H: {persistentConnected}/{_issuerConnections.Count}");
+            SwitchLogger.Debug($"[POOL] Total: {poolStats.TotalPooledConnections} | Active: {poolStats.TotalActivedConnections} | H2H: {persistentConnected}/{_issuerConnections.Count}");
         }
         
         private void OnTransactionTimeout(TransactionContext context)
         {
-            Console.WriteLine($"[TIMEOUT] Transaction {context.TransactionId} timed out after {context.GetProcessingTime()?.TotalMilliseconds}ms");
+            SwitchLogger.Warn($"[TIMEOUT] Transaction {context.TransactionId} timed out after {context.GetProcessingTime()?.TotalMilliseconds}ms");
         }
         
         private void OnReversalRequired(TransactionContext context)
         {
-            Console.WriteLine($"[REVERSAL] Auto-reversal required for transaction {context.TransactionId}");
+            SwitchLogger.Warn($"[REVERSAL] Auto-reversal required for transaction {context.TransactionId}");
+        }
+
+        /// <summary>
+        /// Print a compact one-line H2H status summary. Called on every connect/disconnect event.
+        /// </summary>
+        private void LogH2HSummary()
+        {
+            var parts = _issuerConnections.Values
+                .Select(m => $"{m.TSName}:{(m.IsAnyConnected ? "OK" : "--")}")
+                .ToList();
+            int connected = _issuerConnections.Values.Count(m => m.IsAnyConnected);
+            SwitchLogger.Info($"[H2H] {string.Join(" | ", parts)}  ({connected}/{_issuerConnections.Count} connected)");
         }
 
         
@@ -269,7 +281,7 @@ public class TcpSwitchServer : IDisposable
                     _ = Task.Run(async () =>
                     {
                         try { await HandleClientAsync(client, port); }
-                        catch (Exception ex) { Console.WriteLine($"[ERROR] Unhandled exception on port {port}: {ex.Message}"); }
+                        catch (Exception ex) { SwitchLogger.Error($"[ERROR] Unhandled exception on port {port}: {ex.Message}"); }
                     });
                     
                     // Note: Active sessions count might include both ACQ and ISS sessions now
@@ -278,7 +290,7 @@ public class TcpSwitchServer : IDisposable
                 catch (Exception ex)
                 {
                     if (_isRunning)
-                        Console.WriteLine($" Error accepting connection on port {port}: {ex.Message}");
+                        SwitchLogger.Error("Error accepting connection on port {Port}: {Error}", port, ex.Message);
                 }
             }
         }
@@ -305,22 +317,28 @@ public class TcpSwitchServer : IDisposable
         private async Task HandleIssuerConnectionAsync(TcpClient client, string issuerCode)
         {
             string remoteEp = client.Client.RemoteEndPoint?.ToString() ?? "Unknown";
-            MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"New connection on Port {((IPEndPoint)client.Client.LocalEndPoint).Port} -> Identified as Issuer: {issuerCode}");
+            bool hasManager = _issuerConnections.TryGetValue(issuerCode, out var manager);
+            string issuerLabel = hasManager ? manager!.TSName : issuerCode;
 
-            if (_issuerConnections.TryGetValue(issuerCode, out var manager))
+            SwitchLogger.Debug($"[H2H-PASSIVE] Incoming connection from {remoteEp} -> Identified Issuer: {issuerLabel}");
+            MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"New connection on Port {((IPEndPoint)client.Client.LocalEndPoint).Port} -> Identified as Issuer: {issuerLabel}");
+
+            if (hasManager)
             {
                 // Hand over the TCP Client to the Persistent Connection Manager
                 // It will send the 0800 Sign-On
-                bool accepted = await manager.AcceptConnectionAsync(client);
+                bool accepted = await manager!.AcceptConnectionAsync(client);
                 if (!accepted)
                 {
-                    MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"Manager failed to accept connection for {issuerCode}");
+                    SwitchLogger.Warn($"[H2H-PASSIVE] ISS connection FAILED for {issuerLabel} from {remoteEp} (sign-on rejected)");
+                    MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"Manager failed to accept connection for {issuerLabel}");
                     client.Close();
                 }
             }
             else
             {
-                MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"Critical Error: No manager found for {issuerCode}");
+                SwitchLogger.Error($"[H2H-PASSIVE] No manager found for ISS {issuerLabel} - connection rejected");
+                MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"Critical Error: No manager found for {issuerLabel}");
                 client.Close();
             }
         }
@@ -350,11 +368,7 @@ public class TcpSwitchServer : IDisposable
 
                 _activeSessions.TryAdd(sessionId, session);
 
-                Console.WriteLine($" [{sessionId}] Client connected from {clientEndpoint}");
-                
-                // Log stats on connection join
-                LogServerStats(null);
-                LogPoolHealth(null);
+                SwitchLogger.Debug($"[{sessionId}] ACQ connected from {clientEndpoint}");
 
                 // Set timeouts (30 seconds)
                 stream.ReadTimeout = 30000;
@@ -374,7 +388,7 @@ public class TcpSwitchServer : IDisposable
                     if (int.TryParse(lengthStr, out int asciiLen) && asciiLen > 0 && asciiLen < 2000)
                     {
                         messageLength = asciiLen;
-                        Console.WriteLine($"  [{sessionId}] Detected 4-byte ASCII length header: {lengthStr} (len={messageLength})");
+                        SwitchLogger.Debug($"  [{sessionId}] Detected 4-byte ASCII length header: {lengthStr} (len={messageLength})");
                     }
                     else
                     {
@@ -387,16 +401,16 @@ public class TcpSwitchServer : IDisposable
                         if (binLen4 > 0 && binLen4 < 2000)
                         {
                             messageLength = binLen4;
-                            Console.WriteLine($"  [{sessionId}] Detected 4-byte binary length header. len={messageLength}");
+                            SwitchLogger.Debug($"  [{sessionId}] Detected 4-byte binary length header. len={messageLength}");
                         }
                         else if (binLen2 > 0 && binLen2 < 2000)
                         {
                             messageLength = binLen2;
-                            Console.WriteLine($"  [{sessionId}] Detected 2-byte binary length header (over-read 2 bytes). len={messageLength}");
+                            SwitchLogger.Debug($"  [{sessionId}] Detected 2-byte binary length header (over-read 2 bytes). len={messageLength}");
                         }
                         else
                         {
-                            Console.WriteLine($"  [{sessionId}] Invalid message length header: {BitConverter.ToString(lengthBytes)}");
+                            SwitchLogger.Debug($"  [{sessionId}] Invalid message length header: {BitConverter.ToString(lengthBytes)}");
                             break;
                         }
                     }
@@ -405,11 +419,11 @@ public class TcpSwitchServer : IDisposable
                     byte[]? messageBytes = ReadExactOrNull(stream, messageLength);
                     if (messageBytes == null)
                     {
-                        Console.WriteLine($"  [{sessionId}] Incomplete message (expected {messageLength} bytes)");
+                        SwitchLogger.Debug($"  [{sessionId}] Incomplete message (expected {messageLength} bytes)");
                         break;
                     }
 
-                    Console.WriteLine($" [{sessionId}] Received {messageLength} bytes");
+                    SwitchLogger.Info($" [{sessionId}] Received {messageLength} bytes");
 
                     PrintRawMessage(messageBytes, sessionId);
 
@@ -429,7 +443,7 @@ public class TcpSwitchServer : IDisposable
                         stream.Write(responseBytes, 0, responseBytes.Length);
                         stream.Flush();
  
-                        Console.WriteLine($" [{sessionId}] Sent {responseBytes.Length} bytes response (Length Header: {respLengthStr})\n");
+                        SwitchLogger.Info($" [{sessionId}] Sent {responseBytes.Length} bytes response (Length Header: {respLengthStr})\n");
                     }
 
                     // Update session stats
@@ -439,20 +453,20 @@ public class TcpSwitchServer : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($" [{sessionId}] Error: {ex.Message}");
+                SwitchLogger.Error($" [{sessionId}] Error: {ex.Message}");
             }
             finally
             {
                 // Cleanup
                 stream?.Close();
                 client?.Close();
-                _activeSessions.TryRemove(sessionId, out _);
+                _activeSessions.TryRemove(sessionId, out var ended);
+                int msgCount = ended?.MessageCount ?? 0;
 
-                Console.WriteLine($" [{sessionId}] Client disconnected. Active sessions: {_activeSessions.Count}\n");
-                
-                // Log stats on connection disconnect
-                LogServerStats(null);
-                LogPoolHealth(null);
+                if (msgCount > 0)
+                    SwitchLogger.Info($"[{sessionId}] ACQ disconnected | msgs={msgCount} | active={_activeSessions.Count}");
+                else
+                    SwitchLogger.Debug($"[{sessionId}] ACQ disconnected (no messages) | active={_activeSessions.Count}");
             }
         }
 
@@ -486,7 +500,8 @@ public class TcpSwitchServer : IDisposable
                     request = _parser.Parse(messageBytes);
                     NormalizeTrack2(request);
                 } catch (Exception ex) {
-                    Console.WriteLine($"[{sessionId}] Parse error: {ex.Message}");
+                    SwitchLogger.Warn("[{SessionId}] Parse error: {Error}", sessionId, ex.Message);
+                    ServerMetrics.IncrementParseError();
                     return _parser.Build(IsoResponseBuilder.CreateErrorResponse(new IsoMessage { MessageType = MtiHelper.AuthorizationRequest }, "30"));
                 }
 
@@ -521,7 +536,7 @@ public class TcpSwitchServer : IDisposable
                 {
                     var requestCopy = CloneWithEncryptedPan(request, encryptedPan);
                     if (_pendingStore != null) await _pendingStore.StoreRequestAsync(txnContext.TransactionId, sessionId, requestCopy, messageBytes);
-                    if (_transactionLogger != null) _ = _transactionLogger.LogRequestAsync(requestCopy, sessionId, "INBOUND").ContinueWith(t => Console.WriteLine($"[LOG-ERROR] {t.Exception?.GetBaseException().Message}"), TaskContinuationOptions.OnlyOnFaulted);
+                    if (_transactionLogger != null) _ = _transactionLogger.LogRequestAsync(requestCopy, sessionId, "INBOUND").ContinueWith(t => SwitchLogger.Error("[LOG-ERROR] {Error}", t.Exception?.GetBaseException().Message), TaskContinuationOptions.OnlyOnFaulted);
                 }
 
                 IsoMessage response = request.MessageType switch
@@ -532,6 +547,15 @@ public class TcpSwitchServer : IDisposable
                     MtiHelper.NetworkManagementRequest => HandleEchoRequest(request, sessionId, txnContext),
                     _ => IsoResponseBuilder.CreateErrorResponse(request, "12")
                 };
+
+                // 11.2: Record metrics
+                switch (request.MessageType)
+                {
+                    case MtiHelper.AuthorizationRequest: ServerMetrics.IncrementAuthorization(); break;
+                    case MtiHelper.ReversalRequest: ServerMetrics.IncrementReversal(); break;
+                    case MtiHelper.ReversalAdvice: ServerMetrics.IncrementReversalAdvice(); break;
+                    case MtiHelper.NetworkManagementRequest: ServerMetrics.IncrementEcho(); break;
+                }
 
                 if (!string.IsNullOrEmpty(txnContext.TRN)) response.SetTRN(txnContext.TRN);
                 
@@ -554,17 +578,25 @@ public class TcpSwitchServer : IDisposable
                 stopwatch.Stop();
                 int timeMs = (int)stopwatch.ElapsedMilliseconds;
 
-                if (_transactionLogger != null) _ = _transactionLogger.LogTransactionAsync(request, response, sessionId, timeMs, "COMPLETE").ContinueWith(t => Console.WriteLine($"[LOG-ERROR] {t.Exception?.GetBaseException().Message}"), TaskContinuationOptions.OnlyOnFaulted);
+                if (_transactionLogger != null) _ = _transactionLogger.LogTransactionAsync(request, response, sessionId, timeMs, "COMPLETE").ContinueWith(t => SwitchLogger.Error("[LOG-ERROR] {Error}", t.Exception?.GetBaseException().Message), TaskContinuationOptions.OnlyOnFaulted);
+
+                // 11.2: Record completion metrics
+                string? rc = response.GetField(39);
+                ServerMetrics.RecordResponseCode(rc);
+                ServerMetrics.RecordTransaction();
+                if (rc == "00") ServerMetrics.IncrementSuccess();
+                else ServerMetrics.IncrementFailed();
 
                 if (!MtiHelper.IsNetworkManagement(request.MessageType) && !MtiHelper.IsNetworkManagement(response.MessageType))
                 {
-                    Console.WriteLine($" [{sessionId}] DONE | {request.MessageType}->{response.MessageType} | TRN: {response.GetTRN() ?? "N/A"} | RC: {response.GetField(39) ?? "96"} | {timeMs}ms");
+                    SwitchLogger.Info("[{SessionId}] DONE | {ReqMTI}->{ResMTI} | TRN: {TRN} | RC: {RC} | {TimeMs}ms",
+                        sessionId, request.MessageType, response.MessageType, response.GetTRN() ?? "N/A", rc ?? "96", timeMs);
                 }
                 return _parser.Build(response);   
             }
             catch (Exception ex)
             {
-                Console.WriteLine($" [{sessionId}] Error: {ex.Message}");
+                SwitchLogger.Error($" [{sessionId}] Error: {ex.Message}");
                 txnContext?.TryTransitionTo(TransactionState.Failed, "96", ex.Message);
                 return null;
             }
@@ -605,7 +637,7 @@ public class TcpSwitchServer : IDisposable
             string? cardBIN = request.GetCardBIN();
             if (string.IsNullOrEmpty(cardBIN))
             {
-                Console.WriteLine($"  [{sessionId}] No card BIN found");
+                SwitchLogger.Debug($"  [{sessionId}] No card BIN found");
                 txnContext.TryTransitionTo(TransactionState.Failed, "14", "Invalid card BIN");
                 return null;
             }
@@ -613,7 +645,7 @@ public class TcpSwitchServer : IDisposable
             var issuerBank = ConfigurationLoader.Instance.GetIssuerByBIN(cardBIN);
             if (issuerBank == null)
             {
-                Console.WriteLine($"  [{sessionId}] No issuer found for BIN: {cardBIN}");
+                SwitchLogger.Debug($"  [{sessionId}] No issuer found for BIN: {cardBIN}");
                 txnContext.TryTransitionTo(TransactionState.Failed, "15", "No such issuer");
             }
             return issuerBank;
@@ -629,7 +661,7 @@ public class TcpSwitchServer : IDisposable
             if (string.IsNullOrEmpty(currentDe32) || (currentDe32 == switchId && issuerBank.IsDefault))
             {
                 request.SetField(32, defaultAcquirer);
-                Console.WriteLine($" [{sessionId}] DE#32 normalized to: {defaultAcquirer}");
+                SwitchLogger.Info($" [{sessionId}] DE#32 normalized to: {defaultAcquirer}");
             }
 
             if (issuerBank.IsDefault)
@@ -663,13 +695,13 @@ public class TcpSwitchServer : IDisposable
 
                     if (isPassive)
                     {
-                         Console.WriteLine($" [{sessionId}] [ROUTING] Passive Issuer {issuerBank.IssuerName} is NOT connected. Cannot dial out.");
+                         SwitchLogger.Info($" [{sessionId}] [ROUTING] Passive Issuer {issuerBank.IssuerName} is NOT connected. Cannot dial out.");
                          response = null;
                     }
                     else
                     {
                         if (!issuerBank.IsDefault)
-                            Console.WriteLine($" [{sessionId}] [ROUTING] No active persistent connection for {issuerBank.IssuerName}, falling back to pool");
+                            SwitchLogger.Info($" [{sessionId}] [ROUTING] No active persistent connection for {issuerBank.IssuerName}, falling back to pool");
                         
                         response = await _issuerConnector.ForwardToIssuerAsync(request, issuerBank, sessionId, cancellationToken);
                     }
@@ -677,7 +709,7 @@ public class TcpSwitchServer : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($" [{sessionId}] Routing error: {ex.Message}");
+                SwitchLogger.Info($" [{sessionId}] Routing error: {ex.Message}");
             }
 
             if (response == null)
@@ -694,7 +726,7 @@ public class TcpSwitchServer : IDisposable
         
         private async Task<IsoMessage> HandleReversalAdviceAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
-            Console.WriteLine($" [{sessionId}] Processing reversal advice (0420)");
+            SwitchLogger.Info($" [{sessionId}] Processing reversal advice (0420)");
             
             if (_pendingStore != null)
             {
@@ -707,18 +739,18 @@ public class TcpSwitchServer : IDisposable
                         request.SetField(90, IsoMessage.BuildDE90(
                             original.MessageType, original.RequestSTAN, original.RequestDateTime,
                             original.RequestAcquirerID, null));
-                        Console.WriteLine($"  [{sessionId}] DE#90 built from original: {request.GetField(90)}");
+                        SwitchLogger.Debug($"  [{sessionId}] DE#90 built from original: {request.GetField(90)}");
                     }
                     else if (original == null)
                     {
-                        Console.WriteLine($"  [{sessionId}] [BG-VERIFY] Original NOT found for TRN: {trn}");
+                        SwitchLogger.Debug($"  [{sessionId}] [BG-VERIFY] Original NOT found for TRN: {trn}");
                     }
                 }
             }
             else if (!request.HasField(90))
             {
                 // 13.1: pendingStore is null and DE#90 is missing - issuer may reject
-                Console.WriteLine($"  [{sessionId}] [WARN] PendingStore unavailable and DE#90 missing on 0420 - issuer may reject");
+                SwitchLogger.Debug($"  [{sessionId}] [WARN] PendingStore unavailable and DE#90 missing on 0420 - issuer may reject");
             }
             
             try 
@@ -734,7 +766,7 @@ public class TcpSwitchServer : IDisposable
             }
             catch (Exception ex)
             {
-                Console.WriteLine($" [{sessionId}] [ISS-ERROR] Error handling reversal: {ex.Message}");
+                SwitchLogger.Info($" [{sessionId}] [ISS-ERROR] Error handling reversal: {ex.Message}");
                 return IsoResponseBuilder.CreateErrorResponse(request, "96");
             }
 
@@ -742,7 +774,7 @@ public class TcpSwitchServer : IDisposable
 
         private async Task<IsoMessage> HandleReversalRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
-            Console.WriteLine($" [{sessionId}] Processing reversal request");
+            SwitchLogger.Info($" [{sessionId}] Processing reversal request");
             
             if (_pendingStore != null)
             {
@@ -752,18 +784,18 @@ public class TcpSwitchServer : IDisposable
                     var original = await _pendingStore.GetRequestByTRNAsync(trn);
                     if (original == null)
                     {
-                        Console.WriteLine($"  [{sessionId}] Original transaction not found for TRN: {trn}");
+                        SwitchLogger.Debug($"  [{sessionId}] Original transaction not found for TRN: {trn}");
                         txnContext.TryTransitionTo(TransactionState.Reversed, "25", "Original transaction not found");
                         return IsoResponseBuilder.CreateErrorResponse(request, "25");
                     }
-                    Console.WriteLine($"  [{sessionId}] Original transaction found and verified via TRN: {trn}");
+                    SwitchLogger.Debug($"  [{sessionId}] Original transaction found and verified via TRN: {trn}");
 
                     if (!request.HasField(90))
                     {
                         request.SetField(90, IsoMessage.BuildDE90(
                             original.MessageType, original.RequestSTAN, original.RequestDateTime,
                             original.RequestAcquirerID, null));
-                        Console.WriteLine($"  [{sessionId}] DE#90 built from original: {request.GetField(90)}");
+                        SwitchLogger.Debug($"  [{sessionId}] DE#90 built from original: {request.GetField(90)}");
                     }
                 }
             }
@@ -837,25 +869,25 @@ public class TcpSwitchServer : IDisposable
             if (!request.HasField(22))
             {
                 request.SetField(22, defaults.DefaultPOSEntryMode); 
-                Console.WriteLine($" [{sessionId}] DE#22 missing, setting default: {defaults.DefaultPOSEntryMode}");
+                SwitchLogger.Info($" [{sessionId}] DE#22 missing, setting default: {defaults.DefaultPOSEntryMode}");
             }
 
             if (!request.HasField(25))
             {
                 request.SetField(25, defaults.DefaultPOSConditionCode);
-                Console.WriteLine($" [{sessionId}] DE#25 missing, setting default: {defaults.DefaultPOSConditionCode}");
+                SwitchLogger.Info($" [{sessionId}] DE#25 missing, setting default: {defaults.DefaultPOSConditionCode}");
             }
 
             if (!request.HasField(42))
             {
                 request.SetField(42, defaults.DefaultMerchantId);
-                Console.WriteLine($" [{sessionId}] DE#42 missing, setting default: {defaults.DefaultMerchantId}");
+                SwitchLogger.Info($" [{sessionId}] DE#42 missing, setting default: {defaults.DefaultMerchantId}");
             }
 
             if (!request.HasField(43))
             {
                 request.SetField(43, defaults.DefaultMerchantName);
-                Console.WriteLine($" [{sessionId}] DE#43 missing, setting default: NAPAS TEST MERCHANT");
+                SwitchLogger.Info($" [{sessionId}] DE#43 missing, setting default: NAPAS TEST MERCHANT");
             }
             
             if (!request.HasField(49))
@@ -881,7 +913,7 @@ public class TcpSwitchServer : IDisposable
             {       
                 try { listener.Stop(); } catch { }
             }
-            Console.WriteLine(" Server stopped");
+            SwitchLogger.Info("Server stopped");
         }
 
         
@@ -935,8 +967,8 @@ public class TcpSwitchServer : IDisposable
             }
             else
             {
-                Console.WriteLine("  {0,-14} {1,-8} {2,-22} {3,-10} {4,-10}",
-                    "Issuer", "Code", "Host", "Channel", "Status");
+                Console.WriteLine("  {0,-14} {1,-22} {2,-10} {3,-10}",
+                    "Issuer", "Host", "Channel", "Status");
                 foreach (var kvp in _issuerConnections)
                 {
                     var manager = kvp.Value;
@@ -947,8 +979,8 @@ public class TcpSwitchServer : IDisposable
                     foreach (var ch in channelStatuses)
                     {
                         string hostPort = $"{ch.Host}:{ch.Port}";
-                        Console.Write("  {0,-14} {1,-8} {2,-22} {3,-10} ",
-                            Truncate(ch.IssuerName, 14), ch.IssuerCode, Truncate(hostPort, 20), $"CH{ch.ChannelIndex}({mode})");
+                        Console.Write("  {0,-14} {1,-22} {2,-10} ",
+                            Truncate(ch.IssuerName, 14), Truncate(hostPort, 20), $"CH{ch.ChannelIndex}({mode})");
 
                         if (ch.IsConnected)
                         {
@@ -1010,12 +1042,12 @@ public class TcpSwitchServer : IDisposable
             var drainDeadline = DateTime.UtcNow.AddSeconds(30);
             while (_activeSessions.Count > 0 && DateTime.UtcNow < drainDeadline)
             {
-                Console.WriteLine($"[DISPOSE] Waiting for {_activeSessions.Count} active session(s) to drain...");
+                SwitchLogger.Info("[DISPOSE] Waiting for {SessionCount} active session(s) to drain...", _activeSessions.Count);
                 Thread.Sleep(1000);
             }
             if (_activeSessions.Count > 0)
             {
-                Console.WriteLine($"[DISPOSE] Drain timeout: {_activeSessions.Count} session(s) still active, proceeding with shutdown");
+                SwitchLogger.Info("[DISPOSE] Drain timeout: {SessionCount} session(s) still active, proceeding with shutdown", _activeSessions.Count);
             }
 
             // Gracefully disconnect from all persistent issuer connections
@@ -1028,7 +1060,7 @@ public class TcpSwitchServer : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Console.WriteLine($"[DISPOSE] Error cleaning up manager: {ex.Message}");
+                    SwitchLogger.Error("[DISPOSE] Error cleaning up manager: {Error}", ex.Message);
                 }
             }
             _issuerConnections.Clear();
@@ -1041,7 +1073,7 @@ public class TcpSwitchServer : IDisposable
             _transactionLogger?.Dispose();
             _stateMachine?.Dispose();
             
-            Console.WriteLine("[DISPOSE] TcpSwitchServer disposed");
+            SwitchLogger.Info($"[DISPOSE] TcpSwitchServer disposed");
         }
 
         private static bool LooksLikeHexAscii(byte[] data)

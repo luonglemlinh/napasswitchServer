@@ -1,4 +1,4 @@
-﻿using System;
+using System;
 using System.Linq;
 using System.Net.Sockets;
 using core.Configuration;
@@ -55,29 +55,29 @@ namespace router
                     {
                         retryCount++;
                         int delay = 100 * (int)Math.Pow(2, retryCount - 1);
-                        Console.WriteLine($"[{sessionId}] [ISS-RETRY] Retry {retryCount}/3 for {issuerBank.IssuerName} after {delay}ms. Error: {ex.Message}");
+                        SwitchLogger.Info($"[{sessionId}] [ISS-RETRY] Retry {retryCount}/3 for {issuerBank.IssuerName} after {delay}ms. Error: {ex.Message}");
                         await Task.Delay(delay, cancellationToken);
                     }
                 }
             }
             catch (OperationCanceledException)
             {
-                Console.WriteLine($"[{sessionId}] [ISS-CANCEL] Operation cancelled");
+                SwitchLogger.Info($"[{sessionId}] [ISS-CANCEL] Operation cancelled");
                 return IsoResponseBuilder.CreateSystemErrorResponse(request, "96");
             }
             catch (SocketException ex)
             {
-                Console.WriteLine($"[{sessionId}] [ISS-ERROR] Socket error after retries: {ex.Message}");
+                SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Socket error after retries: {ex.Message}");
                 return IsoResponseBuilder.CreateSystemErrorResponse(request, "91");
             }
             catch (TimeoutException ex)
             {
-                Console.WriteLine($"[{sessionId}] [ISS-ERROR] Timeout after retries: {ex.Message}");
+                SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Timeout after retries: {ex.Message}");
                 return IsoResponseBuilder.CreateTimeoutResponse(request);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[{sessionId}] [ISS-ERROR] Unexpected error after retries: {ex.Message}");
+                SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Unexpected error after retries: {ex.Message}");
                 return IsoResponseBuilder.CreateSystemErrorResponse(request, "96");
             }
         }
@@ -88,7 +88,7 @@ namespace router
 
             try
             {
-                Console.WriteLine($"[{sessionId}] [ISS-CONNECT] Connecting to {issuerBank.IssuerName} at {issuerBank.Host}:{issuerBank.Port}");
+                SwitchLogger.Info($"[{sessionId}] [ISS-CONNECT] Connecting to {issuerBank.IssuerName} at {issuerBank.Host}:{issuerBank.Port}");
 
                 // Step 1: Get connection from pool
                 // Note: GetConnection is currently sync. In a full async refactor, this should be async too.
@@ -111,7 +111,7 @@ namespace router
                 await connection.Stream.WriteAsync(requestBytes, 0, requestBytes.Length);
                 await connection.Stream.FlushAsync();
 
-                Console.WriteLine($"[{sessionId}] [ISS-SEND] {request.MessageType} | TRN: {request.GetTRN() ?? "N/A"}");
+                SwitchLogger.Info("[{SessionId}] [ISS-SEND] {MTI} | TRN: {TRN}", sessionId, request.MessageType, request.GetTRN() ?? "N/A");
 
                 // Step 3: Receive response from ISS
                 byte[] initialBytes = new byte[4];
@@ -130,20 +130,20 @@ namespace router
                 }
                 catch (OperationCanceledException)
                 {
-                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Timeout reading from TS");
+                    SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Timeout reading from TS");
                     connection.MarkAsFailed();
                     throw new TimeoutException("Timeout waiting for response header");
                 }
                 catch (System.IO.IOException ex)
                 {
-                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] Error reading from TS: {ex.Message}");
+                    SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Error reading from TS: {ex.Message}");
                     connection.MarkAsFailed();
                     throw;
                 }
 
                 if (initialRead == 0)
                 {
-                    Console.WriteLine($"[{sessionId}] [ISS-ERROR] TS closed connection without response");
+                    SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] TS closed connection without response");
                     connection.MarkAsFailed();
                     throw new System.IO.IOException("TS closed connection without response");
                 }
@@ -160,7 +160,7 @@ namespace router
                 if (startsWithMti)
                 {
                     // No length header
-                    Console.WriteLine($"[{sessionId}] [ISS-DEBUG] Detected: Response starts with MTI");
+                    SwitchLogger.Info($"[{sessionId}] [ISS-DEBUG] Detected: Response starts with MTI");
                     
                     using var buffer = new System.IO.MemoryStream();
                     buffer.Write(initialBytes, 0, initialRead);
@@ -200,7 +200,7 @@ namespace router
                         messageLength = binLen2;
                     else
                     {
-                        Console.WriteLine($"[{sessionId}] [ISS-ERROR] Unknown response format!");
+                        SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Unknown response format!");
                         connection.MarkAsFailed();
                         throw new System.IO.IOException($"Invalid message length header");
                     }
@@ -217,7 +217,7 @@ namespace router
 
                     if (!await NetworkStreamHelper.TryReadExactAsync(connection.Stream, responseBytes, bytesToCopy, responseLength - bytesToCopy, cts.Token))
                     {
-                        Console.WriteLine($"[{sessionId}] [ISS-ERROR] Failed to read complete response");
+                        SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Failed to read complete response");
                         connection.MarkAsFailed();
                         throw new System.IO.IOException("Failed to read complete response");
                     }
@@ -231,11 +231,11 @@ namespace router
                 MessageLogger.LogMessage(sessionId, "ISS received", response);
                 string respRc = response.GetResponseCode() ?? "00";
                 string respTrn = response.GetTRN() ?? request.GetTRN() ?? "N/A";
-                Console.WriteLine($"[{sessionId}] [ISS-RECV] {response.MessageType} | TRN: {respTrn} | RC: {respRc}");
+                SwitchLogger.Info($"[{sessionId}] [ISS-RECV] {response.MessageType} | TRN: {respTrn} | RC: {respRc}");
 
                 if (rc == "30")
                 {
-                    Console.WriteLine($"[{sessionId}] [ISS-ALERT] Format Error (RC 30) received!");
+                    SwitchLogger.Info($"[{sessionId}] [ISS-ALERT] Format Error (RC 30) received!");
                 }
 
                 return response;

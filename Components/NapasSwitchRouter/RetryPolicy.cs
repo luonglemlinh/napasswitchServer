@@ -1,4 +1,5 @@
 using System;
+using core.Helpers;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -43,12 +44,12 @@ namespace router
 
                     if (attempt > _maxRetries || !shouldRetry(ex))
                     {
-                        Console.WriteLine($"[RETRY] {operationName} failed after {attempt} attempts: {ex.Message}");
+                        SwitchLogger.Info($"[RETRY] {operationName} failed after {attempt} attempts: {ex.Message}");
                         throw;
                     }
 
                     int delay = CalculateDelay(attempt);
-                    Console.WriteLine($"[RETRY] {operationName} attempt {attempt} failed: {ex.Message}. Retrying in {delay}ms...");
+                    SwitchLogger.Info($"[RETRY] {operationName} attempt {attempt} failed: {ex.Message}. Retrying in {delay}ms...");
                     Thread.Sleep(delay);
                 }
             }
@@ -77,12 +78,12 @@ namespace router
 
                     if (attempt > _maxRetries || !shouldRetry(ex))
                     {
-                        Console.WriteLine($"[RETRY] {operationName} failed after {attempt} attempts: {ex.Message}");
+                        SwitchLogger.Info($"[RETRY] {operationName} failed after {attempt} attempts: {ex.Message}");
                         throw;
                     }
 
                     int delay = CalculateDelay(attempt);
-                    Console.WriteLine($"[RETRY] {operationName} attempt {attempt} failed: {ex.Message}. Retrying in {delay}ms...");
+                    SwitchLogger.Info($"[RETRY] {operationName} attempt {attempt} failed: {ex.Message}. Retrying in {delay}ms...");
                     await Task.Delay(delay, cancellationToken);
                 }
             }
@@ -95,7 +96,7 @@ namespace router
             // Exponential backoff with jitter
             double delay = _baseDelayMs * Math.Pow(_backoffMultiplier, attempt - 1);
             
-            // Add random jitter (±25%) using thread-safe Random.Shared
+            // Add random jitter (ï¿½25%) using thread-safe Random.Shared
             double jitter = delay * 0.25 * (Random.Shared.NextDouble() * 2 - 1);
             delay += jitter;
 

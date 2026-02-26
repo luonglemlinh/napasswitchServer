@@ -1,4 +1,5 @@
 using System;
+using core.Helpers;
 using System.Data.SqlClient;
 using System.Threading.Tasks;
 using core.Models;
@@ -63,7 +64,7 @@ namespace data
 
             await command.ExecuteNonQueryAsync();
             
-            Console.WriteLine($"[PENDING-TXN] Stored request {transactionId} | STAN: {request.GetField(11)}");
+            SwitchLogger.Info($"[PENDING-TXN] Stored request {transactionId} | STAN: {request.GetField(11)}");
             return transactionId;
         }
 
@@ -213,7 +214,7 @@ namespace data
             command.Parameters.AddWithValue("@VietnamTime", GetVietnamTime());
 
             await command.ExecuteNonQueryAsync();
-            Console.WriteLine($"[PENDING-TXN] Marked {transactionId} as MATCHED with RC: {responseCode}");
+            SwitchLogger.Info($"[PENDING-TXN] Marked {transactionId} as MATCHED with RC: {responseCode}");
         }
 
         public async Task MarkAsMismatchAsync(string transactionId, string errorReason)
@@ -233,7 +234,7 @@ namespace data
             command.Parameters.AddWithValue("@VietnamTime", GetVietnamTime());
 
             await command.ExecuteNonQueryAsync();
-            Console.WriteLine($"[PENDING-TXN] Marked {transactionId} as MISMATCH: {errorReason}");
+            SwitchLogger.Info($"[PENDING-TXN] Marked {transactionId} as MISMATCH: {errorReason}");
         }
 
         public async Task<int> CleanupExpiredAsync()
@@ -251,7 +252,7 @@ namespace data
 
             int updated = await command.ExecuteNonQueryAsync();
             if (updated > 0)
-                Console.WriteLine($"[PENDING-TXN] Marked {updated} transactions as EXPIRED");
+                SwitchLogger.Info($"[PENDING-TXN] Marked {updated} transactions as EXPIRED");
             
             return updated;
         }

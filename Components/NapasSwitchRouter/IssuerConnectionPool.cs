@@ -1,4 +1,5 @@
 using System;
+using core.Helpers;
 using System.Collections.Concurrent;
 using System.Net.Sockets;
 using System.Threading;
@@ -43,7 +44,7 @@ namespace router
             {
                 if (IsConnectionAlive(existingClient))
                 {
-                    Console.WriteLine($"[POOL] Reusing existing connection to {poolKey}");
+                    SwitchLogger.Info($"[POOL] Reusing existing connection to {poolKey}");
                     return new PooledConnection(existingClient, existingStream, poolEntry, poolKey);
                 }
                 else
@@ -55,7 +56,7 @@ namespace router
             }
 
             // Create new connection
-            Console.WriteLine($"[POOL] Creating new connection to {poolKey}");
+            SwitchLogger.Info($"[POOL] Creating new connection to {poolKey}");
             var client = new TcpClient();
             
             // Use async connect with timeout instead of blocking
@@ -315,13 +316,13 @@ namespace router
                 try { Stream?.Close(); } catch { }
                 try { Client?.Close(); } catch { }
                 _poolEntry.DecrementActiveCount();
-                Console.WriteLine($"[POOL] Connection to {_poolKey} marked as failed, closing");
+                SwitchLogger.Info($"[POOL] Connection to {_poolKey} marked as failed, closing");
             }
             else
             {
                 // Return to pool
                 _poolEntry.ReturnConnection(Client, Stream);
-                Console.WriteLine($"[POOL] Connection to {_poolKey} returned to pool");
+                SwitchLogger.Info($"[POOL] Connection to {_poolKey} returned to pool");
             }
         }
     }

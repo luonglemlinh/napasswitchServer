@@ -1,4 +1,5 @@
 using System;
+using core.Helpers;
 using System.Collections.Concurrent;
 using System.Threading;
 using core.Models;
@@ -70,7 +71,7 @@ namespace router
                 if (newState == TransactionState.Routing) SentToIssuerAt = DateTime.UtcNow;
                 if (IsTerminalState()) CompletedAt = DateTime.UtcNow;
 
-                Console.WriteLine($"[STATE] {TransactionId}: {newState}");
+                SwitchLogger.Info($"[STATE] {TransactionId}: {newState}");
                 return true;
             }
         }
@@ -135,7 +136,7 @@ namespace router
             if (!string.IsNullOrEmpty(stan))
                 _sessionStanIndex[$"{sessionId}:{stan}"] = context.TransactionId;
 
-            Console.WriteLine($"[STATE-MACHINE] Created transaction {context.TransactionId} for session {sessionId}");
+            SwitchLogger.Info($"[STATE-MACHINE] Created transaction {context.TransactionId} for session {sessionId}");
             
             return context;
         }
@@ -169,7 +170,7 @@ namespace router
         {
             if (_transactions.TryRemove(transactionId, out var context))
             {
-                Console.WriteLine($"[STATE-MACHINE] Transaction {transactionId} completed and removed from tracking");
+                SwitchLogger.Info($"[STATE-MACHINE] Transaction {transactionId} completed and removed from tracking");
             }
         }
 
@@ -210,7 +211,7 @@ namespace router
         {
             if (context.TryTransitionTo(TransactionState.Failed))
             {
-                Console.WriteLine($"[STATE-MACHINE] Transaction {context.TransactionId} TIMED OUT");
+                SwitchLogger.Info($"[STATE-MACHINE] Transaction {context.TransactionId} TIMED OUT");
                 OnTransactionTimeout?.Invoke(context);
 
                 // For authorization requests, we may need to send reversal

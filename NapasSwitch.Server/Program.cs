@@ -1,7 +1,8 @@
-﻿using System;
+using System;
 using System.Data.SqlClient;
 using System.IO;
 using core.Configuration;
+using core.Helpers;
 
 namespace server
 {
@@ -10,7 +11,8 @@ namespace server
         static async System.Threading.Tasks.Task Main(string[] args)
         {
             Console.Title = "NAPAS Payment Switch Server";
-            
+            SwitchLogger.Initialize();
+
             Console.WriteLine(@"
 ╔════════════════════════════════════════════════════════════╗
 ║                                                            ║
@@ -23,19 +25,14 @@ namespace server
             try
             {
                 // Step 1: Load configurations
-                Console.WriteLine("[INIT] Initializing configuration...");
-                
+                SwitchLogger.Info("Initializing configuration...");
+
                 // Try to find Config directory
                 string? configPath = FindConfigDirectory();
-                
+
                 if (configPath == null)
                 {
-                    Console.WriteLine("[ERROR] Config directory not found.");
-                    Console.WriteLine("[ERROR] Please create a 'Config' folder at the solution root with:");
-                    Console.WriteLine("        - BINconfig.xml ");
-                    Console.WriteLine("        - ACQconfig.xml ");
-                    Console.WriteLine("        - RCconfig.xml");
-                    Console.WriteLine("        - DBconfig.xml");
+                    SwitchLogger.Error("Config directory not found. Please create a 'Config' folder at the solution root with: BINconfig.xml, ACQconfig.xml, RCconfig.xml, DBconfig.xml");
                     Console.WriteLine("\n[INFO] Press any key to exit...");
                     Console.ReadKey();
                     return;
@@ -48,35 +45,35 @@ namespace server
                 string dbConnectionString = dbConfig.ConnectionString;
                 bool enableLogging = dbConfig.EnableLogging;
 
-                Console.WriteLine($"[INIT] Database logging: {(enableLogging ? "ENABLED" : "DISABLED")}");
-
                 // Step 3: Test database connection if logging is enabled
                 if (enableLogging)
                 {
-                    Console.WriteLine("[INIT] Testing database connection...");
-                    
                     if (TestDatabaseConnection(dbConnectionString))
                     {
-                        Console.WriteLine("[INIT] Database connection successful");
+                        SwitchLogger.Info("Database connection verified (logging: ENABLED)");
                     }
                     else
                     {
-                        Console.WriteLine("[WARNING] Database connection failed");
+                        SwitchLogger.Warn("Database connection failed");
                         Console.WriteLine("[WARNING] Press 'C' to continue without logging, or any other key to exit");
-                        
+
                         var key = Console.ReadKey();
                         Console.WriteLine();
-                        
+
                         if (key.Key != ConsoleKey.C)
                         {
-                            Console.WriteLine("[INFO] Startup cancelled");
+                            SwitchLogger.Info("Startup cancelled");
                             return;
                         }
-                        
+
                         enableLogging = false;
                         dbConnectionString = "";
-                        Console.WriteLine("[INFO] Continuing without database logging");
+                        SwitchLogger.Info("Continuing without database logging");
                     }
+                }
+                else
+                {
+                    SwitchLogger.Info("Database logging: DISABLED");
                 }
 
                 // Step 4: Create and start the server
@@ -84,7 +81,6 @@ namespace server
                 var serverConfig = ConfigurationLoader.Instance.ServerConfig;
                 int[] ports = serverConfig.GetAllPorts();
                 
-                Console.WriteLine($"[INIT] Listening on {ports.Length} ports: {string.Join(", ", ports)}");
                 using var server = new TcpSwitchServer(ports, dbConnectionString, enableLogging);
 
                 Console.WriteLine("\n[READY] Press ENTER to start the server, or 'Q' to quit...");
@@ -93,12 +89,12 @@ namespace server
                 
                 if (startKey.Key == ConsoleKey.Q)
                 {
-                    Console.WriteLine("[INFO] Server startup cancelled");
+                    SwitchLogger.Info("Server startup cancelled");
                     return;
                 }
 
                 // Step 5: Connect to TS (persistent connection)
-                Console.WriteLine("\n[TS] Connecting to Transaction Switch...");
+                SwitchLogger.Info("Connecting to Transaction Switch...");
                 await server.ConnectToTSAsync(); // Use await, don't block with .Wait()
 
                 Console.WriteLine();
@@ -122,7 +118,7 @@ namespace server
                                 server.PrintActiveConnections();
                                 break;
                             case ConsoleKey.Q:
-                                Console.WriteLine("\n[INFO] Shutting down server...");
+                                SwitchLogger.Info("Shutting down server...");
                                 server.Stop();
                                 running = false;
                                 break;
@@ -136,20 +132,15 @@ namespace server
             }
             catch (FileNotFoundException ex)
             {
-                Console.WriteLine($"\n[ERROR] Configuration file not found: {ex.Message}");
-                Console.WriteLine("[ERROR] Please ensure Config folder exists at solution root with:");
-                Console.WriteLine("        - BINconfig.xml");
-                Console.WriteLine("        - ACQconfig.xml");
-                Console.WriteLine("        - RCconfig.xml");
-                Console.WriteLine("        - DBconfig.xml");
+                SwitchLogger.Error(ex, "Configuration file not found: {Message}", ex.Message);
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"\n[FATAL] Unexpected error: {ex.Message}");
-                Console.WriteLine($"[FATAL] Stack trace: {ex.StackTrace}");
+                SwitchLogger.Fatal(ex, "Unexpected error: {Message}", ex.Message);
             }
             finally
             {
+                SwitchLogger.CloseAndFlush();
                 Console.WriteLine("\n[INFO] Press any key to exit...");
                 Console.ReadKey();
             }
@@ -193,25 +184,21 @@ namespace server
                     
                     if (tableCount == 0)
                     {
-                        Console.WriteLine("[ERROR] TransactionLog table does not exist");
-                        Console.WriteLine("[ERROR] Please run the iso.sql script first");
+                        SwitchLogger.Error("TransactionLog table does not exist. Please run the iso.sql script first");
                         return false;
                     }
-                    
-                    Console.WriteLine("[DB-TEST] Connection successful");
-                    Console.WriteLine("[DB-TEST] TransactionLog table verified");
+
                     return true;
                 }
             }
             catch (SqlException ex)
             {
-                Console.WriteLine($"[ERROR] SQL Error: {ex.Message}");
-                Console.WriteLine($"[ERROR] Connection String: {MaskConnectionString(connectionString)}");
+                SwitchLogger.Error(ex, "SQL Error: {Message}. Connection: {ConnStr}", ex.Message, MaskConnectionString(connectionString));
                 return false;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"[ERROR] Connection test failed: {ex.Message}");
+                SwitchLogger.Error(ex, "Connection test failed: {Message}", ex.Message);
                 return false;
             }
         }

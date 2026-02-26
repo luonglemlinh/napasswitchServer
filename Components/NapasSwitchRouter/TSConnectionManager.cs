@@ -1,4 +1,5 @@
 using System;
+using core.Helpers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading.Tasks;
@@ -23,6 +24,11 @@ namespace router
         public int ConnectedCount => _channels.Count(c => c.IsConnected);
         public string TSName => _tsConfig.IssuerName;
 
+        /// <summary>
+        /// Fired when any channel's connection state changes.
+        /// </summary>
+        public event Action? OnConnectionChanged;
+
         public TSConnectionManager(IssuerBankConfig tsConfig, int channelCount = 1, int heartbeatIntervalMs = 75000)
         {
             _tsConfig = tsConfig ?? throw new ArgumentNullException(nameof(tsConfig));
@@ -32,6 +38,7 @@ namespace router
             for (int i = 0; i < _channelCount; i++)
             {
                 var channel = new TSPersistentConnection(tsConfig, heartbeatIntervalMs);
+                channel.OnConnectionChanged += (_, __) => OnConnectionChanged?.Invoke();
                 _channels.Add(channel);
             }
         }
@@ -80,14 +87,14 @@ namespace router
             }
 
             // Fallback: If no channel is connected, try to connect the first one and use it
-            Console.WriteLine($"[TS-MGR] [{sessionId}] No active channels, attempting emergency connect on Channel 0");
+            SwitchLogger.Info($"[TS-MGR] [{sessionId}] No active channels, attempting emergency connect on Channel 0");
             var firstChannel = _channels[0];
             if (await firstChannel.ConnectAsync())
             {
                 return await firstChannel.ForwardTransactionAsync(request, sessionId);
             }
 
-            Console.WriteLine($"[TS-MGR] [{sessionId}] Failed to find any active channel for routing");
+            SwitchLogger.Info($"[TS-MGR] [{sessionId}] Failed to find any active channel for routing");
             return null;
         }
 

@@ -1,4 +1,5 @@
     using System;
+using core.Helpers;
 using System.Collections.Generic;
 using System.Linq;
 using System.Text.RegularExpressions;
@@ -116,7 +117,7 @@ namespace network.Validation
                     }
                 }
 
-                Console.WriteLine($"[NAPAS Validator] Loaded {_dataElementDefinitions.Count} data element definitions from {filePath}");
+                SwitchLogger.Debug($"[INIT] Parsed {_dataElementDefinitions.Count} data element definitions from validation config");
             }
             catch (Exception ex)
             {
@@ -401,7 +402,7 @@ namespace network.Validation
                 {
                     // For error responses, only validate fields that are actually present.
                     // Do not flag missing fields.
-                    Console.WriteLine($"[VALIDATOR] Relaxed validation applied for response with RC {rc}. Mandatory field checks skipped.");
+                    SwitchLogger.Info($"[VALIDATOR] Relaxed validation applied for response with RC {rc}. Mandatory field checks skipped.");
                     return results; 
                 }
             }

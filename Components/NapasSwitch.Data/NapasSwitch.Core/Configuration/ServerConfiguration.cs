@@ -71,5 +71,8 @@ namespace core.Models.Configuration
 
         [XmlElement("ConnectionTimeout")]
         public int ConnectionTimeout { get; set; } = 300000; // 5 minutes default
+
+        [XmlElement("HealthCheckPort")]
+        public int HealthCheckPort { get; set; } = 8080;
     }
 }
