@@ -299,7 +299,7 @@ namespace router
 
         private string GenerateTransactionId()
         {
-            return $"TXN-{DateTime.UtcNow:yyyyHHmmss}-{Guid.NewGuid().ToString("N")[..8]}";
+            return $"TXN-{DateTime.UtcNow:yyyyMMddHHmmss}-{Guid.NewGuid():N}";
         }
 
         public TransactionStateMachineStats GetStats()

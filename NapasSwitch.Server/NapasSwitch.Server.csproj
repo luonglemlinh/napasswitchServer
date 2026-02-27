@@ -19,8 +19,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\Config\NapasValidationConfig.xml">
-      <Link>Config\NapasValidationConfig.xml</Link>
+    <None Include="..\Config\NapasFieldsConfig.xml">
+      <Link>Config\NapasFieldsConfig.xml</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

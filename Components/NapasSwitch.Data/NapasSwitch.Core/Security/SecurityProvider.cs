@@ -69,6 +69,14 @@ namespace core.Security
 
         public SoftwareHsmStub()
         {
+            string? allowStub = Environment.GetEnvironmentVariable("ALLOW_HSM_STUB");
+            if (!string.Equals(allowStub, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new NotSupportedException(
+                    "SoftwareHsmStub is disabled. Set environment variable ALLOW_HSM_STUB=true to enable it. " +
+                    "DO NOT use this in production — use a real HSM (Thales payShield, Futurex, AWS CloudHSM).");
+            }
+
             _keys = LoadOrCreateKeys();
             SwitchLogger.Warn("[HSM] Using software HSM stub — NOT FOR PRODUCTION");
         }

@@ -89,7 +89,11 @@ namespace data
             string direction = "COMPLETE")
         {
             if (!_enableLogging) return Task.CompletedTask;
-            _logChannel.Writer.TryWrite(new TransactionLogEntry(request, response, sessionId, processingTimeMs, direction));
+            if (!_logChannel.Writer.TryWrite(new TransactionLogEntry(request, response, sessionId, processingTimeMs, direction)))
+            {
+                ServerMetrics.IncrementDroppedLogEntries();
+                SwitchLogger.Error("[DB-LOG-DROP] Transaction log entry dropped (channel full). SessionId={SessionId}, Direction={Direction}", sessionId, direction);
+            }
             return Task.CompletedTask;
         }
 
@@ -148,7 +152,11 @@ namespace data
         public Task LogRequestAsync(IsoMessage request, string sessionId, string direction = "INBOUND")
         {
             if (!_enableLogging) return Task.CompletedTask;
-            _logChannel.Writer.TryWrite(new RequestLogEntry(request, sessionId, direction));
+            if (!_logChannel.Writer.TryWrite(new RequestLogEntry(request, sessionId, direction)))
+            {
+                ServerMetrics.IncrementDroppedLogEntries();
+                SwitchLogger.Error("[DB-LOG-DROP] Request log entry dropped (channel full). SessionId={SessionId}, Direction={Direction}", sessionId, direction);
+            }
             return Task.CompletedTask;
         }
 

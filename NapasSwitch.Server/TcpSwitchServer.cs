@@ -79,6 +79,7 @@ public class TcpSwitchServer : IDisposable
         if (hsmProvider == null)
         {
             SwitchLogger.Warn("[SECURITY] No HSM provider injected - using SoftwareHsmStub. NOT FOR PRODUCTION!");
+            Environment.SetEnvironmentVariable("ALLOW_HSM_STUB", "true");
             hsmProvider = new SoftwareHsmStub();
         }
         _securityProvider = new SecureDataHandler(hsmProvider);
@@ -180,8 +181,8 @@ public class TcpSwitchServer : IDisposable
         {
             var searchPaths = new[]
             {
-                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config", "NapasValidationConfig.xml"),
-                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "Config", "NapasValidationConfig.xml"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Config", "NapasFieldsConfig.xml"),
+                Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "..", "..", "..", "..", "Config", "NapasFieldsConfig.xml"),
             };
             
             foreach (var path in searchPaths)

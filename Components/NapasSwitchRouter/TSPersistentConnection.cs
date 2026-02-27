@@ -475,15 +475,16 @@ namespace router
         }
 
         /// <summary>
-        /// Build a composite correlation key from STAN (DE11), RRN (DE37), and date (DE7).
+        /// Build a composite correlation key from STAN (DE11), RRN (DE37), date (DE7), and issuer name.
+        /// Includes issuer name to prevent collisions across different connections.
         /// Falls back to STAN-only if other fields are absent, for network management messages.
         /// </summary>
-        private static string BuildCorrelationKey(IsoMessage msg)
+        private string BuildCorrelationKey(IsoMessage msg)
         {
             string stan = msg.Fields.ContainsKey(11) ? msg.Fields[11] : "000000";
             string rrn = msg.Fields.ContainsKey(37) ? msg.Fields[37] : "";
             string date = msg.Fields.ContainsKey(7) ? msg.Fields[7] : "";
-            return $"{stan}|{rrn}|{date}";
+            return $"{_tsConfig.IssuerName}|{stan}|{rrn}|{date}";
         }
 
         /// <summary>
@@ -541,8 +542,8 @@ namespace router
             await _writeSemaphore.WaitAsync();
             try
             {
-                _stream.Write(fullMessage, 0, fullMessage.Length);
-                _stream.Flush();
+                await _stream.WriteAsync(fullMessage, 0, fullMessage.Length);
+                await _stream.FlushAsync();
             }
             finally
             {

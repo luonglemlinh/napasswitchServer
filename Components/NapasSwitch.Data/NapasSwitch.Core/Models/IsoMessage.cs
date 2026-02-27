@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using core.Helpers;
 
 namespace core.Models
 {
@@ -266,17 +267,17 @@ namespace core.Models
 
         public void LogImportantFields(string sessionId, string prefix = "TS-RESPONSE")
         {
-            Console.WriteLine($"\n [{sessionId}] === {prefix} IMPORTANT FIELDS ===");
-            Console.WriteLine($"   MTI: {MessageType}");
-            
+            SwitchLogger.Info("[{SessionId}] === {Prefix} IMPORTANT FIELDS ===", sessionId, prefix);
+            SwitchLogger.Info("   MTI: {MessageType}", MessageType);
+
             int[] importantFields = { 2, 3, 4, 7, 11, 12, 13, 32, 33, 37, 38, 39, 41, 42, 63 };
-            
+
             foreach (int field in importantFields)
             {
                 if (HasField(field))
                 {
                     string value = GetField(field)!;
-                    
+
                     // Mask sensitive data
                     if (field == 2) 
                     {
@@ -289,24 +290,24 @@ namespace core.Models
                         // Mask Track 2 if logged elsewhere but here we keep it safe
                         value = "[MASKED]";
                     }
-                    
-                    Console.WriteLine($"   {field:D3} ({GetFieldDescription(field)}): {value}");
+
+                    SwitchLogger.Info("   {FieldNum} ({FieldDesc}): {Value}", field.ToString("D3"), GetFieldDescription(field), value);
                 }
             }
-            Console.WriteLine($" [{sessionId}] =====================================\n");
+            SwitchLogger.Info("[{SessionId}] =====================================", sessionId);
         }
         public void LogAllFields(string sessionId, string prefix = "ISO-DEBUG")
         {
-            Console.WriteLine($"\n [{sessionId}] === {prefix} FULL MESSAGE DUMP ===");
-            Console.WriteLine($"   MTI: {MessageType}");
-            if (!string.IsNullOrEmpty(Header)) Console.WriteLine($"   Header: {Header}");
-            
+            SwitchLogger.Info("[{SessionId}] === {Prefix} FULL MESSAGE DUMP ===", sessionId, prefix);
+            SwitchLogger.Info("   MTI: {MessageType}", MessageType);
+            if (!string.IsNullOrEmpty(Header)) SwitchLogger.Info("   Header: {Header}", Header);
+
             foreach (var field in Fields.OrderBy(f => f.Key))
             {
                 int fieldNum = field.Key;
                 string value = field.Value;
                 string label = GetFieldDescription(fieldNum);
-                
+
                 // DE1 (Bitmap) special handling to show both halves
                 if (fieldNum == 1)
                 {
@@ -314,7 +315,7 @@ namespace core.Models
                     if (!string.IsNullOrEmpty(SecondaryBitmap)) fullBitmap += SecondaryBitmap;
                     value = fullBitmap;
                 }
-                
+
                 // Masking rule for testing
                 if (fieldNum == 2) 
                     value = value.Length >= 10 ? $"{value.Substring(0, 6)}****{value.Substring(value.Length - 4)}" : "******";
@@ -322,10 +323,10 @@ namespace core.Models
                     value = "[TRACK DATA MASKED]";
                 else if (fieldNum == 52)
                     value = "[PIN BLOCK MASKED]";
-                
-                Console.WriteLine($"   {fieldNum:D3} ({label}): {value}");
+
+                SwitchLogger.Info("   {FieldNum} ({Label}): {Value}", fieldNum.ToString("D3"), label, value);
             }
-            Console.WriteLine($" [{sessionId}] =====================================\n");
+            SwitchLogger.Info("[{SessionId}] =====================================", sessionId);
         }
     }
 }
