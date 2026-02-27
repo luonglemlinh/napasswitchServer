@@ -5,6 +5,8 @@ using System.IO;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
+using System.Text;
+using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
 using core.Configuration;
@@ -22,7 +24,7 @@ using System.Collections.Generic;
 namespace server
 {
 /// Multi-threaded TCP server that listens for incoming ISO-8583 messages
-    
+
 public class TcpSwitchServer : IDisposable
 {
     private readonly List<TcpListener> _listeners = new();
@@ -41,6 +43,8 @@ public class TcpSwitchServer : IDisposable
     private Timer? _poolHealthTimer;
     private Timer? _cleanupTimer;
     private CancellationTokenSource? _serverCts;
+    private HttpListener? _healthCheckListener;
+    private Task? _healthCheckTask;
 
     // Persistent connection managers for all issuers
     private readonly ConcurrentDictionary<string, TSConnectionManager> _issuerConnections = new();
@@ -91,7 +95,7 @@ public class TcpSwitchServer : IDisposable
 
         if (enableLogging && !string.IsNullOrEmpty(dbConnectionString))
         {
-            _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging);
+            _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging, _securityProvider);
             _pendingStore = new PendingTransactionStore(dbConnectionString, expirationMinutes: 5, _securityProvider);
             SwitchLogger.Info($"[INIT] Transaction logger and pending store initialized");
         }
@@ -199,12 +203,142 @@ public class TcpSwitchServer : IDisposable
             // Disabled timer-based stats - now logs only on connection events
             // _statsTimer = new Timer(LogServerStats, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
             // _poolHealthTimer = new Timer(LogPoolHealth, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
-            
+
             if (_pendingStore != null)
             {
                 _cleanupTimer = new Timer(async _ => await _pendingStore.CleanupExpiredAsync(), 
                     null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
             }
+
+            // Start HTTP health check endpoint for load balancers / Kubernetes probes
+            StartHealthCheckEndpoint();
+        }
+
+        private void StartHealthCheckEndpoint()
+        {
+            try
+            {
+                var serverConfig = ConfigurationLoader.Instance.ServerConfig;
+                int port = serverConfig.Settings.HealthCheckPort;
+                if (port <= 0) return;
+
+                _healthCheckListener = new HttpListener();
+                _healthCheckListener.Prefixes.Add($"http://+:{port}/");
+                _healthCheckListener.Start();
+
+                _healthCheckTask = Task.Run(async () =>
+                {
+                    SwitchLogger.Info("[HEALTH] HTTP health check listening on port {Port}", port);
+                    while (_healthCheckListener.IsListening)
+                    {
+                        try
+                        {
+                            var ctx = await _healthCheckListener.GetContextAsync();
+                            await HandleHealthCheckRequestAsync(ctx);
+                        }
+                        catch (HttpListenerException) { break; }
+                        catch (ObjectDisposedException) { break; }
+                        catch (Exception ex)
+                        {
+                            SwitchLogger.Debug("[HEALTH] Error: {Error}", ex.Message);
+                        }
+                    }
+                });
+            }
+            catch (Exception ex)
+            {
+                SwitchLogger.Warn("[HEALTH] Failed to start health check endpoint: {Error}. " +
+                    "Run as admin or use: netsh http add urlacl url=http://+:{Port}/ user=Everyone", ex.Message);
+            }
+        }
+
+        private async Task HandleHealthCheckRequestAsync(HttpListenerContext ctx)
+        {
+            var request = ctx.Request;
+            var response = ctx.Response;
+
+            try
+            {
+                string path = request.Url?.AbsolutePath?.TrimEnd('/') ?? "";
+
+                string json;
+                int statusCode;
+
+                switch (path)
+                {
+                    case "/health":
+                    case "":
+                        statusCode = _isRunning ? 200 : 503;
+                        json = BuildHealthJson();
+                        break;
+                    case "/health/ready":
+                        bool hasConnections = _issuerConnections.Values.Any(c => c.IsAnyConnected);
+                        statusCode = (_isRunning && hasConnections) ? 200 : 503;
+                        json = JsonSerializer.Serialize(new { status = statusCode == 200 ? "ready" : "not_ready", isRunning = _isRunning, issuerConnections = hasConnections });
+                        break;
+                    case "/metrics":
+                        statusCode = 200;
+                        json = ServerMetrics.ToJson();
+                        break;
+                    default:
+                        statusCode = 404;
+                        json = "{\"error\":\"not_found\"}";
+                        break;
+                }
+
+                response.StatusCode = statusCode;
+                response.ContentType = "application/json";
+                byte[] body = Encoding.UTF8.GetBytes(json);
+                response.ContentLength64 = body.Length;
+                await response.OutputStream.WriteAsync(body, 0, body.Length);
+            }
+            catch (Exception ex)
+            {
+                SwitchLogger.Debug("[HEALTH] Response error: {Error}", ex.Message);
+            }
+            finally
+            {
+                try { response.Close(); } catch { }
+            }
+        }
+
+        private string BuildHealthJson()
+        {
+            var stats = GetStats();
+            var txnStats = _stateMachine.GetStats();
+            int persistentConnected = _issuerConnections.Values.Count(c => c.IsAnyConnected);
+
+            var connections = new Dictionary<string, object>();
+            foreach (var kvp in _issuerConnections)
+            {
+                connections[kvp.Key] = new { connected = kvp.Value.IsAnyConnected };
+            }
+
+            var health = new
+            {
+                status = _isRunning ? "healthy" : "unhealthy",
+                uptime = (DateTime.UtcNow - _serverStartTime).ToString(@"d\.hh\:mm\:ss"),
+                activeConnections = stats.ActiveConnections,
+                totalMessages = stats.TotalMessageCount,
+                tps = ServerMetrics.GetTransactionsPerSecond(),
+                transactions = new
+                {
+                    pending = txnStats.RoutingCount,
+                    completed = txnStats.CompletedCount,
+                    failed = txnStats.FailedCount,
+                    reversing = txnStats.ReversingCount,
+                    active = txnStats.ActiveTransactions
+                },
+                issuerConnections = new
+                {
+                    connected = persistentConnected,
+                    total = _issuerConnections.Count,
+                    details = connections
+                },
+                timestamp = DateTime.UtcNow.ToString("o")
+            };
+
+            return JsonSerializer.Serialize(health, new JsonSerializerOptions { WriteIndented = true });
         }
         
         private void LogServerStats(object? state)
@@ -542,8 +676,9 @@ public class TcpSwitchServer : IDisposable
                 if (MtiHelper.IsFinancialRequest(request.MessageType))
                 {
                     var requestCopy = CloneWithEncryptedPan(request, encryptedPan);
-                    if (_pendingStore != null) await _pendingStore.StoreRequestAsync(txnContext.TransactionId, sessionId, requestCopy, messageBytes);
-                    if (_transactionLogger != null) _ = _transactionLogger.LogRequestAsync(requestCopy, sessionId, "INBOUND").ContinueWith(t => SwitchLogger.Error("[LOG-ERROR] {Error}", t.Exception?.GetBaseException().Message), TaskContinuationOptions.OnlyOnFaulted);
+                    // Fire-and-forget: database writes must not block the transaction hot path
+                    if (_pendingStore != null) _ = _pendingStore.StoreRequestAsync(txnContext.TransactionId, sessionId, requestCopy, messageBytes).ContinueWith(t => SwitchLogger.Error("[PENDING-STORE-ERROR] {Error}", t.Exception?.GetBaseException().Message), TaskContinuationOptions.OnlyOnFaulted);
+                    if (_transactionLogger != null) _ = _transactionLogger.LogRequestAsync(requestCopy, sessionId, "INBOUND");
                 }
 
                 IsoMessage response = request.MessageType switch
@@ -585,7 +720,7 @@ public class TcpSwitchServer : IDisposable
                 stopwatch.Stop();
                 int timeMs = (int)stopwatch.ElapsedMilliseconds;
 
-                if (_transactionLogger != null) _ = _transactionLogger.LogTransactionAsync(request, response, sessionId, timeMs, "COMPLETE").ContinueWith(t => SwitchLogger.Error("[LOG-ERROR] {Error}", t.Exception?.GetBaseException().Message), TaskContinuationOptions.OnlyOnFaulted);
+                if (_transactionLogger != null) _ = _transactionLogger.LogTransactionAsync(request, response, sessionId, timeMs, "COMPLETE");
 
                 // 11.2: Record completion metrics
                 string? rc = response.GetField(39);
@@ -686,12 +821,21 @@ public class TcpSwitchServer : IDisposable
             }
         }
 
+        /// <summary>
+        /// Route a message to the appropriate issuer.
+        /// Connection strategy:
+        ///   1. Persistent H2H channel (TSConnectionManager) — preferred for all bank connections.
+        ///   2. Pool-based fallback (IssuerConnectionPool via IssuerConnector) — emergency only,
+        ///      used when the persistent channel is down and the issuer is active-mode (we dial out).
+        ///      This path should generate alerts; if you see frequent fallbacks, investigate the H2H link.
+        ///   3. Passive issuers (they connect to us) have no fallback — return RC 91 immediately.
+        /// </summary>
         private async Task<IsoMessage> RouteMessageAsync(IsoMessage request, IssuerBankConfig issuerBank, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
             IsoMessage? response = null;
             try 
             {
-                // Try persistent connection manager first
+                // Primary path: persistent H2H connection
                 if (_issuerConnections.TryGetValue(issuerBank.IssuerCode, out var persistentManager) && persistentManager.IsAnyConnected)
                 {
                     response = await persistentManager.ForwardTransactionAsync(request, sessionId);
@@ -707,9 +851,11 @@ public class TcpSwitchServer : IDisposable
                     }
                     else
                     {
+                        // Emergency fallback: pool-based connection
                         if (!issuerBank.IsDefault)
-                            SwitchLogger.Info($" [{sessionId}] [ROUTING] No active persistent connection for {issuerBank.IssuerName}, falling back to pool");
-                        
+                            SwitchLogger.Warn($" [{sessionId}] [ROUTING] No active persistent connection for {issuerBank.IssuerName}, falling back to pool (investigate H2H link)");
+
+                        ServerMetrics.IncrementConnectionError();
                         response = await _issuerConnector.ForwardToIssuerAsync(request, issuerBank, sessionId, cancellationToken);
                     }
                 }
@@ -1079,6 +1225,7 @@ public class TcpSwitchServer : IDisposable
             _statsTimer?.Dispose();
             _poolHealthTimer?.Dispose();
             _cleanupTimer?.Dispose();
+            try { _healthCheckListener?.Stop(); _healthCheckListener?.Close(); } catch { }
             _serverCts?.Dispose();
             _issuerConnector?.Dispose();
             _transactionLogger?.Dispose();

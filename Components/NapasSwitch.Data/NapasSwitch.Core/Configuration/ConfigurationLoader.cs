@@ -8,11 +8,32 @@ using core.Models.Configuration;
 
 namespace core.Configuration
 {
-    
+
+    /// Abstraction for configuration loading — enables mocking and DI registration.
+    /// Register as singleton in a DI container to replace the static Instance accessor.
+
+    public interface IConfigurationLoader
+    {
+        void LoadConfigurations(string configDirectory);
+        IssuerBankConfig? GetIssuerByBIN(string cardBIN);
+        IssuerBankConfig? GetIssuerByCode(string issuerCode);
+        AcquirerConfig? GetAcquirerByCode(string acquirerCode);
+        string GetResponseDescription(string responseCode);
+        List<IssuerBankConfig> GetAllIssuers();
+        List<AcquirerConfig> GetAllAcquirers();
+        bool IsBINRoutable(string cardBIN);
+        ConfigurationStats GetStats();
+        DatabaseConfiguration DatabaseConfig { get; }
+        ServerConfiguration ServerConfig { get; }
+    }
+
+
     /// Loads and manages all XML configuration files for the switch
-    /// This is a Singleton - only one instance exists throughout the application
-    
-    public class ConfigurationLoader
+    /// Implements IConfigurationLoader for testability.
+    /// The static Instance property is kept for backward compatibility but
+    /// new code should accept IConfigurationLoader via constructor injection.
+
+    public class ConfigurationLoader : IConfigurationLoader
     {
         private static ConfigurationLoader? _instance;
         private static readonly object _lock = new object();
@@ -101,11 +122,23 @@ namespace core.Configuration
             }
 
             // Allow environment variable to override the connection string
+            // PCI-DSS: Connection strings must NOT be stored in config files on disk.
+            // The environment variable is the REQUIRED source for the connection string.
             string? envConnStr = Environment.GetEnvironmentVariable("NAPAS_DB_CONNECTION_STRING");
             if (!string.IsNullOrEmpty(envConnStr))
             {
                 _databaseConfig.ConnectionString = envConnStr;
-                SwitchLogger.Info($"[CONFIG] Database connection string overridden by NAPAS_DB_CONNECTION_STRING env variable");
+                SwitchLogger.Info($"[CONFIG] Database connection string loaded from NAPAS_DB_CONNECTION_STRING env variable");
+            }
+            else if (string.IsNullOrEmpty(_databaseConfig.ConnectionString))
+            {
+                SwitchLogger.Warn("[CONFIG] WARNING: NAPAS_DB_CONNECTION_STRING env variable not set. Database logging will be disabled.");
+                SwitchLogger.Warn("[CONFIG] Set the env variable: NAPAS_DB_CONNECTION_STRING=Server=...;Database=...;...");
+                _databaseConfig.EnableLogging = false;
+            }
+            else
+            {
+                SwitchLogger.Warn("[CONFIG] WARNING: Connection string loaded from XML config file. Use NAPAS_DB_CONNECTION_STRING env variable in production.");
             }
 
             // Load Server Configuration (Listener Ports)

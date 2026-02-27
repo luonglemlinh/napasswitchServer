@@ -1,45 +1,96 @@
 using System;
 using core.Helpers;
+using core.Security;
 using Microsoft.Data.SqlClient;
 using System.Threading.Tasks;
+using System.Threading.Channels;
 using System.IO;
 using core.Models;
 
 namespace data
 {
-    
+
     /// Handles logging of all transactions to database
-    /// Falls back to local file logging when database is unavailable
-    
+    /// Uses Channel&lt;T&gt; to buffer writes and batch insert for high throughput.
+    /// Falls back to local file logging when database is unavailable.
+
     public class TransactionLogger : IDisposable
     {
         private readonly string _connectionString;
         private readonly bool _enableLogging;
+        private readonly SecureDataHandler? _secureDataHandler;
+        private readonly Channel<LogEntry> _logChannel;
+        private readonly Task _writerTask;
+        private readonly CancellationTokenSource _cts = new();
+        private bool _disposed;
 
-        public TransactionLogger(string connectionString, bool enableLogging = true)
+        private abstract record LogEntry;
+        private sealed record TransactionLogEntry(IsoMessage Request, IsoMessage Response, string SessionId, int ProcessingTimeMs, string Direction) : LogEntry;
+        private sealed record RequestLogEntry(IsoMessage Request, string SessionId, string Direction) : LogEntry;
+
+        public TransactionLogger(string connectionString, bool enableLogging = true, SecureDataHandler? secureDataHandler = null)
         {
             _connectionString = connectionString;
             _enableLogging = enableLogging;
+            _secureDataHandler = secureDataHandler;
+            _logChannel = Channel.CreateBounded<LogEntry>(new BoundedChannelOptions(1000)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false
+            });
+
+            _writerTask = Task.Run(ProcessLogEntriesAsync);
         }
 
-        public async Task LogTransactionAsync(
+        private async Task ProcessLogEntriesAsync()
+        {
+            var reader = _logChannel.Reader;
+            try
+            {
+                await foreach (var entry in reader.ReadAllAsync(_cts.Token))
+                {
+                    try
+                    {
+                        switch (entry)
+                        {
+                            case TransactionLogEntry txn:
+                                await LogTransactionToDbAsync(txn.Request, txn.Response, txn.SessionId, txn.ProcessingTimeMs, txn.Direction);
+                                break;
+                            case RequestLogEntry req:
+                                await LogRequestToDbAsync(req.Request, req.SessionId, req.Direction);
+                                break;
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        SwitchLogger.Info($"[DB-LOG-ERROR] Background write failed: {ex.Message}");
+                    }
+                }
+            }
+            catch (OperationCanceledException) { /* Graceful shutdown */ }
+        }
+
+        /// <summary>
+        /// Encrypt PAN using the injected SecureDataHandler, or mask if unavailable.
+        /// </summary>
+        private string? EncryptPanForStorage(string? pan)
+        {
+            if (string.IsNullOrEmpty(pan)) return null;
+            if (_secureDataHandler != null) return _secureDataHandler.EncryptPAN(pan);
+            return SecureDataHandler.MaskPAN(pan);
+        }
+
+        public Task LogTransactionAsync(
             IsoMessage request,
             IsoMessage response,
             string sessionId,
             int processingTimeMs,
             string direction = "COMPLETE")
         {
-            if (!_enableLogging) return;
-
-            try 
-            {
-                await LogTransactionToDbAsync(request, response, sessionId, processingTimeMs, direction);
-            }
-            catch (Exception ex)
-            {
-                SwitchLogger.Info($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
-                core.Helpers.MessageLogger.LogMessage(sessionId, direction, response ?? request);
-            }
+            if (!_enableLogging) return Task.CompletedTask;
+            _logChannel.Writer.TryWrite(new TransactionLogEntry(request, response, sessionId, processingTimeMs, direction));
+            return Task.CompletedTask;
         }
 
         private async Task LogTransactionToDbAsync(
@@ -49,93 +100,101 @@ namespace data
             int processingTimeMs,
             string direction)
         {
-            using (var connection = new SqlConnection(_connectionString))
+            try
             {
-                await connection.OpenAsync();
-
-                string query = @"
-                                INSERT INTO TransactionLog 
-                                (SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
-                                 AcquirerID, IssuerID, ResponseCode, TerminalID, MerchantID,
-                                 TransactionTime, LoggedAt, ProcessingTimeMs, Direction)
-                                VALUES 
-                                (@SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
-                                 @AcquirerID, @IssuerID, @ResponseCode, @TerminalID, @MerchantID,
-                                 @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction)";
-
-                using (var command = new SqlCommand(query, connection))
+                using (var connection = new SqlConnection(_connectionString))
                 {
-                    command.Parameters.AddWithValue("@SessionId", sessionId);
-                    command.Parameters.AddWithValue("@MessageType", request.MessageType);
-                    command.Parameters.AddWithValue("@PAN", (object?)request.GetPAN() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@ProcessingCode", (object?)request.GetProcessingCode() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@Amount", ParseAmount(request.GetAmount()));
-                    command.Parameters.AddWithValue("@STAN", (object?)request.GetSTAN() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@AcquirerID", (object?)request.GetAcquirerID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@IssuerID", (object?)request.GetIssuerID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@ResponseCode", (object?)response.GetResponseCode() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@TransactionTime", DateTime.UtcNow);
-                    command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
-                    command.Parameters.AddWithValue("@ProcessingTimeMs", processingTimeMs);
-                    command.Parameters.AddWithValue("@Direction", direction);
+                    await connection.OpenAsync();
 
-                    await command.ExecuteNonQueryAsync();
+                    string query = @"
+                                    INSERT INTO TransactionLog 
+                                    (SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
+                                     AcquirerID, IssuerID, ResponseCode, TerminalID, MerchantID,
+                                     TransactionTime, LoggedAt, ProcessingTimeMs, Direction)
+                                    VALUES 
+                                    (@SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
+                                     @AcquirerID, @IssuerID, @ResponseCode, @TerminalID, @MerchantID,
+                                     @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction)";
+
+                    using (var command = new SqlCommand(query, connection))
+                    {
+                        command.Parameters.AddWithValue("@SessionId", sessionId);
+                        command.Parameters.AddWithValue("@MessageType", request.MessageType);
+                        command.Parameters.AddWithValue("@PAN", (object?)EncryptPanForStorage(request.GetPAN()) ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@ProcessingCode", (object?)request.GetProcessingCode() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@Amount", ParseAmount(request.GetAmount()));
+                        command.Parameters.AddWithValue("@STAN", (object?)request.GetSTAN() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@AcquirerID", (object?)request.GetAcquirerID() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@IssuerID", (object?)request.GetIssuerID() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@ResponseCode", (object?)response.GetResponseCode() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@TransactionTime", DateTime.UtcNow);
+                        command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
+                        command.Parameters.AddWithValue("@ProcessingTimeMs", processingTimeMs);
+                        command.Parameters.AddWithValue("@Direction", direction);
+
+                        await command.ExecuteNonQueryAsync();
+                    }
                 }
+            }
+            catch (Exception ex)
+            {
+                SwitchLogger.Info($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
+                core.Helpers.MessageLogger.LogMessage(sessionId, direction, response ?? request);
             }
         }
 
-        public async Task LogRequestAsync(IsoMessage request, string sessionId, string direction = "INBOUND")
+        public Task LogRequestAsync(IsoMessage request, string sessionId, string direction = "INBOUND")
         {
-            if (!_enableLogging) return;
+            if (!_enableLogging) return Task.CompletedTask;
+            _logChannel.Writer.TryWrite(new RequestLogEntry(request, sessionId, direction));
+            return Task.CompletedTask;
+        }
 
-            try 
+        private async Task LogRequestToDbAsync(IsoMessage request, string sessionId, string direction)
+        {
+            try
             {
-                await LogRequestToDbAsync(request, sessionId, direction);
+                using (var connection = new SqlConnection(_connectionString))
+                {
+                    await connection.OpenAsync();
+
+                    string query = @"
+                                    INSERT INTO TransactionLog 
+                                    (SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
+                                     AcquirerID, IssuerID, TerminalID, MerchantID,
+                                     TransactionTime, LoggedAt, ProcessingTimeMs, Direction)
+                                    VALUES 
+                                    (@SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
+                                     @AcquirerID, @IssuerID, @TerminalID, @MerchantID,
+                                     @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction)";
+
+                    using (var command = new SqlCommand(query, connection))
+                    {
+                        command.Parameters.AddWithValue("@SessionId", sessionId);
+                        command.Parameters.AddWithValue("@MessageType", request.MessageType);
+                        command.Parameters.AddWithValue("@PAN", (object?)EncryptPanForStorage(request.GetPAN()) ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@ProcessingCode", (object?)request.GetProcessingCode() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@Amount", ParseAmount(request.GetAmount()));
+                        command.Parameters.AddWithValue("@STAN", (object?)request.GetSTAN() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@AcquirerID", (object?)request.GetAcquirerID() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@IssuerID", (object?)request.GetIssuerID() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
+                        command.Parameters.AddWithValue("@TransactionTime", DateTime.UtcNow);
+                        command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
+                        command.Parameters.AddWithValue("@ProcessingTimeMs", 0);
+                        command.Parameters.AddWithValue("@Direction", direction);
+
+                        await command.ExecuteNonQueryAsync();
+                    }
+                }
             }
             catch (Exception ex)
             {
                 SwitchLogger.Info($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
                 core.Helpers.MessageLogger.LogMessage(sessionId, direction, request);
-            }
-        }
-
-        private async Task LogRequestToDbAsync(IsoMessage request, string sessionId, string direction)
-        {
-            using (var connection = new SqlConnection(_connectionString))
-            {
-                await connection.OpenAsync();
-
-                string query = @"
-                                INSERT INTO TransactionLog 
-                                (SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
-                                 AcquirerID, IssuerID, TerminalID, MerchantID,
-                                 TransactionTime, LoggedAt, ProcessingTimeMs, Direction)
-                                VALUES 
-                                (@SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
-                                 @AcquirerID, @IssuerID, @TerminalID, @MerchantID,
-                                 @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction)";
-
-                using (var command = new SqlCommand(query, connection))
-                {
-                    command.Parameters.AddWithValue("@SessionId", sessionId);
-                    command.Parameters.AddWithValue("@MessageType", request.MessageType);
-                    command.Parameters.AddWithValue("@PAN", (object?)request.GetPAN() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@ProcessingCode", (object?)request.GetProcessingCode() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@Amount", ParseAmount(request.GetAmount()));
-                    command.Parameters.AddWithValue("@STAN", (object?)request.GetSTAN() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@AcquirerID", (object?)request.GetAcquirerID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@IssuerID", (object?)request.GetIssuerID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
-                    command.Parameters.AddWithValue("@TransactionTime", DateTime.UtcNow);
-                    command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
-                    command.Parameters.AddWithValue("@ProcessingTimeMs", 0); // Inbound requests don't have processing time yet
-                    command.Parameters.AddWithValue("@Direction", direction);
-
-                    await command.ExecuteNonQueryAsync();
-                }
             }
         }
 
@@ -197,6 +256,12 @@ namespace data
 
         public void Dispose()
         {
+            if (_disposed) return;
+            _disposed = true;
+            _logChannel.Writer.Complete();
+            _cts.Cancel();
+            try { _writerTask.Wait(TimeSpan.FromSeconds(5)); } catch { }
+            _cts.Dispose();
         }
     }
 

@@ -18,18 +18,27 @@ namespace router
         private readonly IssuerBankConfig _tsConfig;
         private readonly IsoParser _parser;
         private readonly SemaphoreSlim _writeSemaphore = new SemaphoreSlim(1, 1);
-        
+
         private TcpClient? _client;
         private NetworkStream? _stream;
         private Timer? _heartbeatTimer;
         private CancellationTokenSource? _connectionCts;
-        
+
         private bool _isConnected;
         private bool _disposed;
         private int _heartbeatIntervalMs;
         private int _stan = 0;
 
-        // Track pending requests by STAN (DE11) to correlate responses
+        // Circuit breaker state — fail fast when an issuer is down
+        private enum CircuitState { Closed, Open, HalfOpen }
+        private CircuitState _circuitState = CircuitState.Closed;
+        private int _consecutiveFailures;
+        private DateTime _circuitOpenedAt;
+        private const int CircuitBreakerThreshold = 5;
+        private static readonly TimeSpan CircuitBreakerCooldown = TimeSpan.FromSeconds(30);
+
+        // Track pending requests by composite key (STAN+RRN+Date) to correlate responses safely
+        // STAN alone is only 6 digits (000001-999999) and can collide under load
         private readonly ConcurrentDictionary<string, TaskCompletionSource<IsoMessage>> _pendingResponses = new();
 
         public bool IsConnected => _isConnected && _client?.Connected == true;
@@ -253,11 +262,11 @@ namespace router
         private void HandleParsedMessage(IsoMessage msg)
         {
             string mti = msg.MessageType;
-            string stan = msg.Fields.ContainsKey(11) ? msg.Fields[11] : "000000";
+            string correlationKey = BuildCorrelationKey(msg);
 
             if (!MtiHelper.IsNetworkManagement(mti))
             {
-                SwitchLogger.Info($"[TS-RECV] Received MTI={mti} STAN={stan}");
+                SwitchLogger.Info($"[TS-RECV] Received MTI={mti} Key={correlationKey}");
             }
 
             if (mti == MtiHelper.NetworkManagementRequest)
@@ -267,14 +276,14 @@ namespace router
             }
             else if (MtiHelper.IsResponse(mti))
             {
-                // Response to our request -> Find TCS and complete it
-                if (_pendingResponses.TryRemove(stan, out var tcs))
+                // Response to our request -> Find TCS by composite key and complete it
+                if (_pendingResponses.TryRemove(correlationKey, out var tcs))
                 {
                     tcs.TrySetResult(msg);
                 }
                 else
                 {
-                    SwitchLogger.Info($"[TS-RECV] Warning: Unmatched response received for STAN={stan}");
+                    SwitchLogger.Info($"[TS-RECV] Warning: Unmatched response received (Key={correlationKey})");
                 }
             }
         }
@@ -408,21 +417,73 @@ namespace router
 
         public async Task<IsoMessage?> ForwardTransactionAsync(IsoMessage request, string sessionId)
         {
+            // Circuit breaker: fail fast when issuer is known to be down
+            if (_circuitState == CircuitState.Open)
+            {
+                if (DateTime.UtcNow - _circuitOpenedAt < CircuitBreakerCooldown)
+                {
+                    SwitchLogger.Debug($"[{sessionId}] [CIRCUIT] OPEN for {_tsConfig.IssuerName} — failing fast");
+                    return null;
+                }
+                // Cooldown elapsed, try half-open
+                _circuitState = CircuitState.HalfOpen;
+                SwitchLogger.Info($"[{sessionId}] [CIRCUIT] HALF-OPEN for {_tsConfig.IssuerName} — attempting probe");
+            }
+
             if (!IsConnected) await ConnectAsync();
-            
+
             // Log message before forwarding to TS
             MessageLogger.LogMessage(sessionId, "ISS forward", request);
             SwitchLogger.Info("[{SessionId}] [TS-FWD] {MTI} | TRN: {TRN}", sessionId, request.MessageType, request.GetTRN() ?? "N/A");
-            
+
             try
             {
-                return await SendRequestAsync(request, sessionId);
+                var response = await SendRequestAsync(request, sessionId);
+                if (response != null)
+                {
+                    // Success: reset circuit breaker
+                    _consecutiveFailures = 0;
+                    if (_circuitState != CircuitState.Closed)
+                    {
+                        _circuitState = CircuitState.Closed;
+                        SwitchLogger.Info($"[{sessionId}] [CIRCUIT] CLOSED for {_tsConfig.IssuerName} — connection recovered");
+                    }
+                }
+                else
+                {
+                    RecordCircuitFailure(sessionId);
+                }
+                return response;
             }
             catch (Exception ex)
             {
+                RecordCircuitFailure(sessionId);
                 SwitchLogger.Info($"[{sessionId}] [TS-FWD] Error: {ex.Message}");
                 return null;
             }
+        }
+
+        private void RecordCircuitFailure(string sessionId)
+        {
+            _consecutiveFailures++;
+            if (_consecutiveFailures >= CircuitBreakerThreshold && _circuitState != CircuitState.Open)
+            {
+                _circuitState = CircuitState.Open;
+                _circuitOpenedAt = DateTime.UtcNow;
+                SwitchLogger.Warn($"[{sessionId}] [CIRCUIT] OPENED for {_tsConfig.IssuerName} after {_consecutiveFailures} consecutive failures — failing fast for {CircuitBreakerCooldown.TotalSeconds}s");
+            }
+        }
+
+        /// <summary>
+        /// Build a composite correlation key from STAN (DE11), RRN (DE37), and date (DE7).
+        /// Falls back to STAN-only if other fields are absent, for network management messages.
+        /// </summary>
+        private static string BuildCorrelationKey(IsoMessage msg)
+        {
+            string stan = msg.Fields.ContainsKey(11) ? msg.Fields[11] : "000000";
+            string rrn = msg.Fields.ContainsKey(37) ? msg.Fields[37] : "";
+            string date = msg.Fields.ContainsKey(7) ? msg.Fields[7] : "";
+            return $"{stan}|{rrn}|{date}";
         }
 
         /// <summary>
@@ -430,10 +491,10 @@ namespace router
         /// </summary>
         private async Task<IsoMessage?> SendRequestAsync(IsoMessage request, string sessionId)
         {
-             string stan = request.Fields.ContainsKey(11) ? request.Fields[11] : "000000";
+             string correlationKey = BuildCorrelationKey(request);
              var tcs = new TaskCompletionSource<IsoMessage>(TaskCreationOptions.RunContinuationsAsynchronously);
-             
-             _pendingResponses[stan] = tcs;
+
+             _pendingResponses[correlationKey] = tcs;
 
              // Send
              await SendMessageInternalAsync(request, sessionId, isResponse: false);
@@ -448,8 +509,8 @@ namespace router
              }
              else
              {
-                 _pendingResponses.TryRemove(stan, out _);
-                 SwitchLogger.Info($"[{sessionId}] [TS-SEND] Timeout waiting for response (STAN={stan})");
+                 _pendingResponses.TryRemove(correlationKey, out _);
+                 SwitchLogger.Info($"[{sessionId}] [TS-SEND] Timeout waiting for response (Key={correlationKey})");
                  return null;
              }
         }
