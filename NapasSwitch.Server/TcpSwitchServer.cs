@@ -394,7 +394,7 @@ public class TcpSwitchServer : IDisposable
             }
 
             Console.WriteLine("╔═══════════════════════════════════════════════════╗");
-            Console.WriteLine("║       NAPAS SWITCH SERVER STARTED                 ║");
+            Console.WriteLine("║                SWITCH SERVER STARTED              ║");
             Console.WriteLine("╚═══════════════════════════════════════════════════╝");
             
             // Get port configuration from ServerConfig
