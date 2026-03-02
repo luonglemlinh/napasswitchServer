@@ -92,10 +92,8 @@ namespace router
             {
                 SwitchLogger.Info($"[{sessionId}] [ISS-CONNECT] Connecting to {issuerBank.IssuerName} at {issuerBank.Host}:{issuerBank.Port}");
 
-                // Step 1: Get connection from pool
-                // Note: GetConnection is currently sync. In a full async refactor, this should be async too.
-                // For now, we accept this localized blocking call or wrap it if it takes time.
-                connection = _connectionPool.GetConnection(issuerBank);
+                // Step 1: Get connection from pool (fully async — no thread blocking)
+                connection = await _connectionPool.GetConnectionAsync(issuerBank);
 
                 // Step 2: Build and send the ISO-8583 message
                 byte[] requestBytes = _parser.Build(request);

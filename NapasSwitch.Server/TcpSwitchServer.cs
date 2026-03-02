@@ -38,6 +38,7 @@ public class TcpSwitchServer : IDisposable
     private readonly SecureDataHandler _securityProvider;
     private readonly UnsettledTransactionStore? _unsettledStore;
     private readonly ResponseCorrelationValidator _correlationValidator;
+    private readonly IConfigurationLoader _config;
     private readonly MessageFramer _framer = new(MessageFramer.LengthHeaderFormat.Ascii4Byte);
     private readonly HealthCheckServer _healthCheck;
     private readonly SafRetryQueue? _safQueue;
@@ -59,14 +60,15 @@ public class TcpSwitchServer : IDisposable
     private readonly NapasDataElementValidator _validator;
 
     // Keep single-port constructor
-    public TcpSwitchServer(int port = 1111, string dbConnectionString = "", bool enableLogging = true, IHsmProvider? hsmProvider = null)
-        : this(new[] { port }, dbConnectionString, enableLogging, hsmProvider)
+    public TcpSwitchServer(int port = 1111, string dbConnectionString = "", bool enableLogging = true, IHsmProvider? hsmProvider = null, IConfigurationLoader? config = null)
+        : this(new[] { port }, dbConnectionString, enableLogging, hsmProvider, config)
     {
     }
 
     // New multi-port constructor
-    public TcpSwitchServer(int[] ports, string dbConnectionString = "", bool enableLogging = true, IHsmProvider? hsmProvider = null)
+    public TcpSwitchServer(int[] ports, string dbConnectionString = "", bool enableLogging = true, IHsmProvider? hsmProvider = null, IConfigurationLoader? config = null)
     {
+        _config = config ?? ConfigurationLoader.Instance;
         _serverStartTime = DateTime.UtcNow;
         _ports = ports.Distinct().Where(p => p > 0).ToList();
         if (_ports.Count == 0) throw new ArgumentException("At least one valid port is required.", nameof(ports));
@@ -97,7 +99,7 @@ public class TcpSwitchServer : IDisposable
         _correlationValidator = new ResponseCorrelationValidator();
         _healthCheck = new HealthCheckServer(
             () => _isRunning, () => GetStats(), () => _stateMachine.GetStats(),
-            _issuerConnections, _serverStartTime);
+            _issuerConnections, _serverStartTime, _config);
 
         _stateMachine.OnTransactionTimeout += OnTransactionTimeout;
         _stateMachine.OnReversalRequired += OnReversalRequired;
@@ -130,7 +132,7 @@ public class TcpSwitchServer : IDisposable
     /// </summary>
     private void InitializeTSConnection()
     {
-        var allIssuers = ConfigurationLoader.Instance.GetAllIssuers();
+        var allIssuers = _config.GetAllIssuers();
         var passive = new List<string>();
         var active = new List<string>();
         var skipped = new List<string>();
@@ -297,17 +299,17 @@ public class TcpSwitchServer : IDisposable
             Console.WriteLine("╚═══════════════════════════════════════════════════╝");
             
             // Get port configuration from ServerConfig
-            var serverConfig = ConfigurationLoader.Instance.ServerConfig;
+            var serverConfig = _config.ServerConfig;
             var issPorts = serverConfig.IssuerPorts.Select(p => p.ToString()).ToList();
             var acqPorts = serverConfig.AcquirerPorts.Select(p => p.ToString()).ToList();
 
             if (issPorts.Count > 0)
                 Console.WriteLine($" [ISS] Listening on port: {string.Join(", ", issPorts)}");
-            
+
             if (acqPorts.Count > 0)
                 Console.WriteLine($" [ACQ] Listening on port: {string.Join(", ", acqPorts)}");
             Console.WriteLine($" Started at: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-            Console.WriteLine($" Configuration: {ConfigurationLoader.Instance.GetStats()}");
+            Console.WriteLine($" Configuration: {_config.GetStats()}");
             Console.WriteLine("\n Waiting for client connections...\n");
         }
 
@@ -661,7 +663,7 @@ public class TcpSwitchServer : IDisposable
                 return null;
             }
 
-            var issuerBank = ConfigurationLoader.Instance.GetIssuerByBIN(cardBIN);
+            var issuerBank = _config.GetIssuerByBIN(cardBIN);
             if (issuerBank == null)
             {
                 SwitchLogger.Debug($"  [{sessionId}] No issuer found for BIN: {cardBIN}");
@@ -674,7 +676,7 @@ public class TcpSwitchServer : IDisposable
         {
             // DE#32 (Acquirer ID) & DE#33 (Forwarding ID) management
             string switchId = issuerBank.IssuerCode; 
-            string defaultAcquirer = ConfigurationLoader.Instance.ServerConfig.Defaults.DefaultAcquirerId;
+            string defaultAcquirer = _config.ServerConfig.Defaults.DefaultAcquirerId;
 
             string currentDe32 = request.GetField(32) ?? string.Empty;
             if (string.IsNullOrEmpty(currentDe32) || (currentDe32 == switchId && issuerBank.IsDefault))
@@ -896,18 +898,28 @@ public class TcpSwitchServer : IDisposable
 
         /// <summary>
         /// SAF retry callback: Re-attempt to forward a failed advice to the issuer.
+        /// Uses lightweight routing without creating tracked TransactionContexts
+        /// to avoid leaking state-machine entries on every retry attempt.
         /// </summary>
         private async Task<bool> RetrySafAdviceAsync(SafEntry entry)
         {
             try
             {
-                var issuerBank = GetIssuer(entry.Request, entry.SessionId,
-                    _stateMachine.CreateTransaction(entry.SessionId, entry.Request));
+                string? cardBIN = entry.Request.GetCardBIN();
+                if (string.IsNullOrEmpty(cardBIN)) return false;
+
+                var issuerBank = _config.GetIssuerByBIN(cardBIN);
                 if (issuerBank == null) return false;
 
                 PrepareMessageForRouting(entry.Request, issuerBank, entry.SessionId);
-                var response = await RouteMessageAsync(entry.Request, issuerBank, entry.SessionId,
-                    _stateMachine.CreateTransaction(entry.SessionId, entry.Request), CancellationToken.None);
+
+                IsoMessage? response = null;
+                if (_issuerConnections.TryGetValue(issuerBank.IssuerCode, out var manager) && manager.IsAnyConnected)
+                {
+                    response = await manager.ForwardTransactionAsync(entry.Request, entry.SessionId);
+                }
+
+                if (response == null) return false;
 
                 string? rc = response.GetField(39);
                 bool success = rc == "00";
@@ -1015,14 +1027,19 @@ public class TcpSwitchServer : IDisposable
             if (!msg.HasField(12)) msg.SetField(12, nowVn.ToString("HHmmss"));
             if (!msg.HasField(13)) msg.SetField(13, nowVn.ToString("MMdd"));
             
-            // DE#15 Settlement Date (MMDD) - Always set by switch per NAPAS spec
-            // This OVERWRITES any value from member institutions
+            // DE#15 Settlement Date (MMDD)
+            // NAPAS spec 4.2.1: The switch ALWAYS sets DE#15 to the current settlement date.
+            // This is intentional — NAPAS does not allow member institutions to set their own
+            // settlement date. If an acquirer sends a correction for a prior day's transaction,
+            // it must go through a separate reconciliation process (not DE#15 override).
+            // Void/reversal for prior-day transactions is blocked by the SettlementDate check
+            // in ForwardAdviceToIssuerAsync and GetOriginalForVoidReversalAsync.
             msg.SetField(15, nowVn.ToString("MMdd"));
         }
 
         private void EnsureMandatoryNapasFields(IsoMessage request, string sessionId)
         {
-            var defaults = ConfigurationLoader.Instance.ServerConfig.Defaults;
+            var defaults = _config.ServerConfig.Defaults;
 
             if (!request.HasField(22))
             {

@@ -29,11 +29,13 @@ namespace core.Helpers
         }
 
         /// <summary>
-        /// Check if an MTI represents a response (3rd character is '1').
+        /// Check if an MTI represents a response.
+        /// ISO-8583 function codes: 0=request, 1=request response, 2=advice, 3=advice response.
+        /// Both '1' (e.g., 0210, 0410, 0810) and '3' (e.g., 0430) are responses.
         /// </summary>
         public static bool IsResponse(string mti)
         {
-            return mti.Length == 4 && mti[2] == '1';
+            return mti.Length == 4 && (mti[2] == '1' || mti[2] == '3');
         }
 
         /// <summary>
@@ -45,12 +47,21 @@ namespace core.Helpers
         }
 
         /// <summary>
-        /// Check if the MTI is a financial request that requires pending store tracking.
+        /// Check if the MTI requires UnsettledTransaction store tracking.
+        /// Includes 0200 (authorization), 0400 (reversal), and 0420 (advice/void).
+        /// Note: 0420 gets immediate ACK to ACQ and separate ISS forwarding,
+        /// but still needs store tracking for same-day void/reversal lookup.
         /// </summary>
-        public static bool IsFinancialRequest(string mti)
+        public static bool RequiresStoreTracking(string mti)
         {
             return mti == AuthorizationRequest || mti == ReversalRequest || mti == ReversalAdvice;
         }
+
+        /// <summary>
+        /// Backward-compatible alias for RequiresStoreTracking.
+        /// Prefer RequiresStoreTracking in new code for clarity.
+        /// </summary>
+        public static bool IsFinancialRequest(string mti) => RequiresStoreTracking(mti);
 
         /// <summary>
         /// Check if the MTI is a reversal-type message (0400 or 0420).
