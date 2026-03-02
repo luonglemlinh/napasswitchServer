@@ -64,7 +64,7 @@ namespace data
                     }
                     catch (Exception ex)
                     {
-                        SwitchLogger.Info($"[DB-LOG-ERROR] Background write failed: {ex.Message}");
+                        SwitchLogger.ForContext("DB-LOG").Error("Background write failed: {Error}", ex.Message);
                     }
                 }
             }
@@ -92,7 +92,8 @@ namespace data
             if (!_logChannel.Writer.TryWrite(new TransactionLogEntry(request, response, sessionId, processingTimeMs, direction)))
             {
                 ServerMetrics.IncrementDroppedLogEntries();
-                SwitchLogger.Error("[DB-LOG-DROP] Transaction log entry dropped (channel full). SessionId={SessionId}, Direction={Direction}", sessionId, direction);
+                SwitchLogger.ForContext("DB-LOG").Error("Channel full — falling back to file log. SessionId={SessionId}, Direction={Direction}", sessionId, direction);
+                core.Helpers.MessageLogger.LogMessage(sessionId, $"DB-OVERFLOW-{direction}", response ?? request);
             }
             return Task.CompletedTask;
         }
@@ -114,11 +115,11 @@ namespace data
                                     INSERT INTO TransactionLog 
                                     (SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
                                      AcquirerID, IssuerID, ResponseCode, TerminalID, MerchantID,
-                                     TransactionTime, LoggedAt, ProcessingTimeMs, Direction)
+                                     TransactionTime, LoggedAt, ProcessingTimeMs, Direction, TransactionType)
                                     VALUES 
                                     (@SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
                                      @AcquirerID, @IssuerID, @ResponseCode, @TerminalID, @MerchantID,
-                                     @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction)";
+                                     @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction, @TransactionType)";
 
                     using (var command = new SqlCommand(query, connection))
                     {
@@ -137,6 +138,8 @@ namespace data
                         command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
                         command.Parameters.AddWithValue("@ProcessingTimeMs", processingTimeMs);
                         command.Parameters.AddWithValue("@Direction", direction);
+                        command.Parameters.AddWithValue("@TransactionType",
+                            TransactionTypeHelper.GetTransactionType(request.MessageType, request.GetProcessingCode()));
 
                         await command.ExecuteNonQueryAsync();
                     }
@@ -144,7 +147,7 @@ namespace data
             }
             catch (Exception ex)
             {
-                SwitchLogger.Info($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
+                SwitchLogger.ForContext("DB-LOG").Error("Connection failed, falling back to message log: {Error}", ex.Message);
                 core.Helpers.MessageLogger.LogMessage(sessionId, direction, response ?? request);
             }
         }
@@ -155,7 +158,8 @@ namespace data
             if (!_logChannel.Writer.TryWrite(new RequestLogEntry(request, sessionId, direction)))
             {
                 ServerMetrics.IncrementDroppedLogEntries();
-                SwitchLogger.Error("[DB-LOG-DROP] Request log entry dropped (channel full). SessionId={SessionId}, Direction={Direction}", sessionId, direction);
+                SwitchLogger.ForContext("DB-LOG").Error("Channel full — falling back to file log. SessionId={SessionId}, Direction={Direction}", sessionId, direction);
+                core.Helpers.MessageLogger.LogMessage(sessionId, $"DB-OVERFLOW-{direction}", request);
             }
             return Task.CompletedTask;
         }
@@ -172,11 +176,11 @@ namespace data
                                     INSERT INTO TransactionLog 
                                     (SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
                                      AcquirerID, IssuerID, TerminalID, MerchantID,
-                                     TransactionTime, LoggedAt, ProcessingTimeMs, Direction)
+                                     TransactionTime, LoggedAt, ProcessingTimeMs, Direction, TransactionType)
                                     VALUES 
                                     (@SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
                                      @AcquirerID, @IssuerID, @TerminalID, @MerchantID,
-                                     @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction)";
+                                     @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction, @TransactionType)";
 
                     using (var command = new SqlCommand(query, connection))
                     {
@@ -194,6 +198,8 @@ namespace data
                         command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
                         command.Parameters.AddWithValue("@ProcessingTimeMs", 0);
                         command.Parameters.AddWithValue("@Direction", direction);
+                        command.Parameters.AddWithValue("@TransactionType",
+                            TransactionTypeHelper.GetTransactionType(request.MessageType, request.GetProcessingCode()));
 
                         await command.ExecuteNonQueryAsync();
                     }
@@ -201,7 +207,7 @@ namespace data
             }
             catch (Exception ex)
             {
-                SwitchLogger.Info($"[DB-LOG-ERROR] Connection failed, falling back to message log: {ex.Message}");
+                SwitchLogger.ForContext("DB-LOG").Error("Request log failed, falling back to message log: {Error}", ex.Message);
                 core.Helpers.MessageLogger.LogMessage(sessionId, direction, request);
             }
         }
@@ -256,7 +262,7 @@ namespace data
             }
             catch (Exception ex)
             {
-                SwitchLogger.Info($"[ERROR] Failed to get stats: {ex.Message}");
+                SwitchLogger.ForContext("DB-LOG").Error("Failed to get stats: {Error}", ex.Message);
             }
 
             return new TransactionStats();

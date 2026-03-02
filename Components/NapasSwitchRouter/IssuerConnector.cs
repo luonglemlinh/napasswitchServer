@@ -100,129 +100,126 @@ namespace router
                 // Step 2: Build and send the ISO-8583 message
                 byte[] requestBytes = _parser.Build(request);
 
-                // Prepare length header (2 bytes, big-endian)
-                byte[] lengthHeader = new byte[2];
-                lengthHeader[0] = (byte)(requestBytes.Length >> 8);
-                lengthHeader[1] = (byte)(requestBytes.Length & 0xFF);
+                // Send with configured wire format (length header style)
+                string wireFormat = issuerBank.WireFormat?.ToUpperInvariant() ?? "BIN2";
+                switch (wireFormat)
+                {
+                    case "ASCII4":
+                        byte[] ascii4Header = System.Text.Encoding.ASCII.GetBytes(requestBytes.Length.ToString("D4"));
+                        await connection.Stream.WriteAsync(ascii4Header, 0, 4);
+                        break;
+                    case "BIN4":
+                        byte[] bin4Header = new byte[4];
+                        bin4Header[0] = (byte)(requestBytes.Length >> 24);
+                        bin4Header[1] = (byte)(requestBytes.Length >> 16);
+                        bin4Header[2] = (byte)(requestBytes.Length >> 8);
+                        bin4Header[3] = (byte)(requestBytes.Length & 0xFF);
+                        await connection.Stream.WriteAsync(bin4Header, 0, 4);
+                        break;
+                    case "NONE":
+                        // No length header — raw MTI start
+                        break;
+                    case "BIN2":
+                    default:
+                        byte[] bin2Header = new byte[2];
+                        bin2Header[0] = (byte)(requestBytes.Length >> 8);
+                        bin2Header[1] = (byte)(requestBytes.Length & 0xFF);
+                        await connection.Stream.WriteAsync(bin2Header, 0, 2);
+                        break;
+                }
 
                 // Log request before forwarding to ISS
                 MessageLogger.LogMessage(sessionId, "ISS forward", request);
-                
+
                 // Send to ISS (Async)
-                await connection.Stream.WriteAsync(lengthHeader, 0, 2);
                 await connection.Stream.WriteAsync(requestBytes, 0, requestBytes.Length);
                 await connection.Stream.FlushAsync();
 
                 SwitchLogger.Info("[{SessionId}] [ISS-SEND] {MTI} | TRN: {TRN}", sessionId, request.MessageType, request.GetTRN() ?? "N/A");
 
-                // Step 3: Receive response from ISS
-                byte[] initialBytes = new byte[4];
-                int initialRead = 0;
-                
-                // Set a reasonable read timeout
-                // NetworkStream.ReadAsync respects ReadTimeout in modern .NET but mostly relies on cancellation tokens.
-                // We'll use a CancellationToken source for timeout.
+                // Step 3: Receive response from ISS using configured wire format
                 using var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                cts.CancelAfter(30000);
-                
+                cts.CancelAfter(issuerBank.Timeout > 0 ? issuerBank.Timeout : 30000);
+
+                int responseLength;
+                byte[] responseBytes;
+
                 try
                 {
-                    // Try to read first 4 bytes to detect format
-                    initialRead = await connection.Stream.ReadAsync(initialBytes, 0, 4, cts.Token);
+                    switch (wireFormat)
+                    {
+                        case "ASCII4":
+                        {
+                            byte[] hdr = new byte[4];
+                            if (!await NetworkStreamHelper.TryReadExactAsync(connection.Stream, hdr, 0, 4, cts.Token))
+                                throw new System.IO.IOException("Failed to read 4-byte ASCII length header");
+                            string lenStr = System.Text.Encoding.ASCII.GetString(hdr);
+                            if (!int.TryParse(lenStr, out responseLength) || responseLength <= 0 || responseLength > 65535)
+                                throw new System.IO.IOException($"Invalid ASCII4 length: {lenStr}");
+                            responseBytes = new byte[responseLength];
+                            if (!await NetworkStreamHelper.TryReadExactAsync(connection.Stream, responseBytes, 0, responseLength, cts.Token))
+                                throw new System.IO.IOException("Failed to read complete response");
+                            break;
+                        }
+                        case "BIN4":
+                        {
+                            byte[] hdr = new byte[4];
+                            if (!await NetworkStreamHelper.TryReadExactAsync(connection.Stream, hdr, 0, 4, cts.Token))
+                                throw new System.IO.IOException("Failed to read 4-byte binary length header");
+                            responseLength = (hdr[0] << 24) | (hdr[1] << 16) | (hdr[2] << 8) | hdr[3];
+                            if (responseLength <= 0 || responseLength > 65535)
+                                throw new System.IO.IOException($"Invalid BIN4 length: {responseLength}");
+                            responseBytes = new byte[responseLength];
+                            if (!await NetworkStreamHelper.TryReadExactAsync(connection.Stream, responseBytes, 0, responseLength, cts.Token))
+                                throw new System.IO.IOException("Failed to read complete response");
+                            break;
+                        }
+                        case "NONE":
+                        {
+                            // No length header — read until stream ends or timeout
+                            using var buffer = new System.IO.MemoryStream();
+                            byte[] chunk = new byte[4096];
+                            int chunkRead;
+                            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(cts.Token);
+                            readCts.CancelAfter(2000);
+                            try
+                            {
+                                while ((chunkRead = await connection.Stream.ReadAsync(chunk, 0, chunk.Length, readCts.Token)) > 0)
+                                    buffer.Write(chunk, 0, chunkRead);
+                            }
+                            catch (OperationCanceledException) { /* Expected — end of stream */ }
+                            responseBytes = buffer.ToArray();
+                            responseLength = responseBytes.Length;
+                            if (responseLength == 0) throw new System.IO.IOException("TS closed connection without response");
+                            break;
+                        }
+                        case "BIN2":
+                        default:
+                        {
+                            byte[] hdr = new byte[2];
+                            if (!await NetworkStreamHelper.TryReadExactAsync(connection.Stream, hdr, 0, 2, cts.Token))
+                                throw new System.IO.IOException("Failed to read 2-byte binary length header");
+                            responseLength = (hdr[0] << 8) | hdr[1];
+                            if (responseLength <= 0 || responseLength > 65535)
+                                throw new System.IO.IOException($"Invalid BIN2 length: {responseLength}");
+                            responseBytes = new byte[responseLength];
+                            if (!await NetworkStreamHelper.TryReadExactAsync(connection.Stream, responseBytes, 0, responseLength, cts.Token))
+                                throw new System.IO.IOException("Failed to read complete response");
+                            break;
+                        }
+                    }
                 }
                 catch (OperationCanceledException)
                 {
-                    SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Timeout reading from TS");
+                    SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Timeout reading from TS ({wireFormat})");
                     connection.MarkAsFailed();
-                    throw new TimeoutException("Timeout waiting for response header");
+                    throw new TimeoutException($"Timeout waiting for response (wire format: {wireFormat})");
                 }
                 catch (System.IO.IOException ex)
                 {
                     SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Error reading from TS: {ex.Message}");
                     connection.MarkAsFailed();
                     throw;
-                }
-
-                if (initialRead == 0)
-                {
-                    SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] TS closed connection without response");
-                    connection.MarkAsFailed();
-                    throw new System.IO.IOException("TS closed connection without response");
-                }
-                
-                int responseLength;
-                byte[] responseBytes;
-
-                // Try to detect response format
-                // Check if response starts with MTI (e.g., "0210" = 30 32 31 30)
-                bool startsWithMti = initialRead >= 4 && 
-                    initialBytes[0] == 0x30 && 
-                    (initialBytes[1] == 0x32 || initialBytes[1] == 0x34 || initialBytes[1] == 0x38);
-
-                if (startsWithMti)
-                {
-                    // No length header
-                    SwitchLogger.Info($"[{sessionId}] [ISS-DEBUG] Detected: Response starts with MTI");
-                    
-                    using var buffer = new System.IO.MemoryStream();
-                    buffer.Write(initialBytes, 0, initialRead);
-                    
-                    byte[] chunk = new byte[1024];
-                    int chunkRead;
-                    
-                    // Short timeout for remaining data
-                    using var chunkCts = new CancellationTokenSource(2000);
-                    
-                    try
-                    {
-                        while ((chunkRead = await connection.Stream.ReadAsync(chunk, 0, chunk.Length, chunkCts.Token)) > 0)
-                        {
-                            buffer.Write(chunk, 0, chunkRead);
-                        }
-                    }
-                    catch (OperationCanceledException) { /* Expected end of stream if no closure */ }
-                    
-                    responseBytes = buffer.ToArray();
-                    responseLength = responseBytes.Length;
-                }
-                else 
-                {
-                    // Detect and handle length header
-                    int messageLength = 0;
-                    string lengthStr = System.Text.Encoding.ASCII.GetString(initialBytes);
-                    
-                    int binLen4 = (initialBytes[0] << 24) | (initialBytes[1] << 16) | (initialBytes[2] << 8) | initialBytes[3];
-                    int binLen2 = (initialBytes[0] << 8) | initialBytes[1];
-
-                    if (int.TryParse(lengthStr, out int asciiLen) && asciiLen > 0 && asciiLen < 65535)
-                        messageLength = asciiLen;
-                    else if (binLen4 > 0 && binLen4 < 65535)
-                        messageLength = binLen4;
-                    else if (binLen2 > 0 && binLen2 < 65535)
-                        messageLength = binLen2;
-                    else
-                    {
-                        SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Unknown response format!");
-                        connection.MarkAsFailed();
-                        throw new System.IO.IOException($"Invalid message length header");
-                    }
-
-                    responseLength = messageLength;
-                    responseBytes = new byte[responseLength];
-
-                    int bytesToCopy = 0;
-                    if (messageLength == binLen2) // 2-byte binary
-                    {
-                        bytesToCopy = Math.Min(initialRead - 2, responseLength);
-                        Array.Copy(initialBytes, 2, responseBytes, 0, bytesToCopy);
-                    }
-
-                    if (!await NetworkStreamHelper.TryReadExactAsync(connection.Stream, responseBytes, bytesToCopy, responseLength - bytesToCopy, cts.Token))
-                    {
-                        SwitchLogger.Info($"[{sessionId}] [ISS-ERROR] Failed to read complete response");
-                        connection.MarkAsFailed();
-                        throw new System.IO.IOException("Failed to read complete response");
-                    }
                 }
 
                 // Step 4: Parse the response

@@ -3,6 +3,7 @@ using Microsoft.Data.SqlClient;
 using System.IO;
 using core.Configuration;
 using core.Helpers;
+using core.Security;
 
 namespace server
 {
@@ -74,12 +75,38 @@ namespace server
                     SwitchLogger.Info("Database logging: DISABLED");
                 }
 
-                // Step 4: Create and start the server
+                // Step 4: Resolve HSM provider
+                IHsmProvider? hsmProvider = null;
+                string? allowStub = Environment.GetEnvironmentVariable("ALLOW_HSM_STUB");
+                if (string.Equals(allowStub, "true", StringComparison.OrdinalIgnoreCase))
+                {
+                    hsmProvider = new SoftwareHsmStub();
+                }
+                else
+                {
+                    SwitchLogger.Warn("No HSM provider configured and ALLOW_HSM_STUB is not set.");
+                    Console.WriteLine("[WARNING] No HSM provider. Press 'C' to continue with software stub (DEV ONLY), or any other key to exit");
+
+                    var hsmKey = Console.ReadKey();
+                    Console.WriteLine();
+
+                    if (hsmKey.Key != ConsoleKey.C)
+                    {
+                        SwitchLogger.Info("Startup cancelled — no HSM provider");
+                        return;
+                    }
+
+                    Environment.SetEnvironmentVariable("ALLOW_HSM_STUB", "true");
+                    hsmProvider = new SoftwareHsmStub();
+                    SwitchLogger.ForContext("SECURITY").Warn("Using SoftwareHsmStub for this session. NOT FOR PRODUCTION!");
+                }
+
+                // Step 5: Create and start the server
                 // Load ports from ServerConfig.xml instead of hardcoding
                 var serverConfig = ConfigurationLoader.Instance.ServerConfig;
                 int[] ports = serverConfig.GetAllPorts();
-                
-                using var server = new TcpSwitchServer(ports, dbConnectionString, enableLogging);
+
+                using var server = new TcpSwitchServer(ports, dbConnectionString, enableLogging, hsmProvider);
 
                 Console.WriteLine("\n[READY] Press ENTER to start the server, or 'Q' to quit...");
                 var startKey = Console.ReadKey();
@@ -91,7 +118,7 @@ namespace server
                     return;
                 }
 
-                // Step 5: Connect to TS (persistent connection)
+                // Step 6: Connect to TS (persistent connection)
                 SwitchLogger.Info("Connecting to Transaction Switch...");
                 await server.ConnectToTSAsync(); // Use await, don't block with .Wait()
 
@@ -101,10 +128,11 @@ namespace server
                 server.Start();
 
                 // Console command loop
-                Console.WriteLine(" Commands: [S] Show connections  [Q] Quit");
+                Console.WriteLine(" Commands: [S] Show connections  [P] Pause/Resume  [Q] Quit");
                 Console.WriteLine();
 
                 bool running = true;
+                bool paused = false;
                 while (running)
                 {
                     if (Console.KeyAvailable)
@@ -115,9 +143,24 @@ namespace server
                             case ConsoleKey.S:
                                 server.PrintActiveConnections();
                                 break;
+                            case ConsoleKey.P:
+                                if (!paused)
+                                {
+                                    server.Stop();
+                                    paused = true;
+                                    SwitchLogger.Info("Server paused — press [P] to resume");
+                                    Console.WriteLine(" ** SERVER PAUSED — press [P] to resume, [Q] to quit **");
+                                }
+                                else
+                                {
+                                    server.Start();
+                                    paused = false;
+                                    SwitchLogger.Info("Server resumed");
+                                }
+                                break;
                             case ConsoleKey.Q:
                                 SwitchLogger.Info("Shutting down server...");
-                                server.Stop();
+                                if (!paused) server.Stop();
                                 running = false;
                                 break;
                         }

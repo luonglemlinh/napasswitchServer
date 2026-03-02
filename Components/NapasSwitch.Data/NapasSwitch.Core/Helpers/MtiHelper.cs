@@ -45,11 +45,11 @@ namespace core.Helpers
         }
 
         /// <summary>
-        /// Check if the MTI is a financial request (0200 or 0400).
+        /// Check if the MTI is a financial request that requires pending store tracking.
         /// </summary>
         public static bool IsFinancialRequest(string mti)
         {
-            return mti == AuthorizationRequest || mti == ReversalRequest;
+            return mti == AuthorizationRequest || mti == ReversalRequest || mti == ReversalAdvice;
         }
 
         /// <summary>
@@ -58,6 +58,15 @@ namespace core.Helpers
         public static bool IsReversal(string mti)
         {
             return mti == ReversalRequest || mti == ReversalAdvice;
+        }
+
+        /// <summary>
+        /// Check if the MTI is an advice message (0420). Advice messages
+        /// receive an immediate 0430 acknowledgment before ISS forwarding.
+        /// </summary>
+        public static bool IsAdvice(string mti)
+        {
+            return mti == ReversalAdvice;
         }
     }
 }

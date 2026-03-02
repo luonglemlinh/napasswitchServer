@@ -36,7 +36,7 @@ public class TcpSwitchServer : IDisposable
     private readonly TransactionLogger? _transactionLogger;
     private readonly TransactionStateMachine _stateMachine;
     private readonly SecureDataHandler _securityProvider;
-    private readonly PendingTransactionStore? _pendingStore;
+    private readonly UnsettledTransactionStore? _unsettledStore;
     private readonly ResponseCorrelationValidator _correlationValidator;
     private bool _disposed;
     private Timer? _statsTimer;
@@ -75,12 +75,22 @@ public class TcpSwitchServer : IDisposable
         _activeSessions = new ConcurrentDictionary<string, ClientSession>();
         _stateMachine = new TransactionStateMachine(transactionTimeoutSeconds: 30);
 
-        // Use injected HSM provider or fall back to software stub (with warning)
+        // Use injected HSM provider or fail hard — no silent stub activation
         if (hsmProvider == null)
         {
-            SwitchLogger.Warn("[SECURITY] No HSM provider injected - using SoftwareHsmStub. NOT FOR PRODUCTION!");
-            Environment.SetEnvironmentVariable("ALLOW_HSM_STUB", "true");
-            hsmProvider = new SoftwareHsmStub();
+            string? allowStub = Environment.GetEnvironmentVariable("ALLOW_HSM_STUB");
+            if (string.Equals(allowStub, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                SwitchLogger.ForContext("SECURITY").Warn("ALLOW_HSM_STUB is set — using SoftwareHsmStub. NOT FOR PRODUCTION!");
+                hsmProvider = new SoftwareHsmStub();
+            }
+            else
+            {
+                throw new InvalidOperationException(
+                    "No IHsmProvider injected and ALLOW_HSM_STUB is not set. " +
+                    "Inject a real HSM provider (Thales payShield, Futurex, AWS CloudHSM) " +
+                    "or set ALLOW_HSM_STUB=true for development only.");
+            }
         }
         _securityProvider = new SecureDataHandler(hsmProvider);
         _correlationValidator = new ResponseCorrelationValidator();
@@ -90,21 +100,21 @@ public class TcpSwitchServer : IDisposable
 
         string configPath = FindValidationConfigPath();
         _validator = new NapasDataElementValidator(configPath);
-        SwitchLogger.Info($"[INIT] Validation config loaded: {Path.GetFileName(configPath)}");
+        SwitchLogger.ForContext("INIT").Info("Validation config loaded: {ConfigFile}", Path.GetFileName(configPath));
 
         InitializeTSConnection();
 
         if (enableLogging && !string.IsNullOrEmpty(dbConnectionString))
         {
             _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging, _securityProvider);
-            _pendingStore = new PendingTransactionStore(dbConnectionString, expirationMinutes: 5, _securityProvider);
-            SwitchLogger.Info($"[INIT] Transaction logger and pending store initialized");
+            _unsettledStore = new UnsettledTransactionStore(dbConnectionString, expirationMinutes: 5, _securityProvider);
+            SwitchLogger.ForContext("INIT").Info("Transaction logger and unsettled store initialized");
         }
         else
         {
             _transactionLogger = null;
-            _pendingStore = null;
-            SwitchLogger.Info($"[INIT] Transaction logger disabled");
+            _unsettledStore = null;
+            SwitchLogger.ForContext("INIT").Info("Transaction logger disabled");
         }
 
         StartBackgroundMonitoring();
@@ -153,10 +163,10 @@ public class TcpSwitchServer : IDisposable
             }
         }
 
-        SwitchLogger.Info($"[INIT] Issuer connections: {_issuerConnections.Count} ready (passive={passive.Count}, active={active.Count}, skipped={skipped.Count})");
-        if (passive.Count > 0) SwitchLogger.Debug($"[INIT] Passive: {string.Join(", ", passive)}");
-        if (active.Count > 0)  SwitchLogger.Debug($"[INIT] Active: {string.Join(", ", active)}");
-        if (skipped.Count > 0) SwitchLogger.Debug($"[INIT] Skipped: {string.Join(", ", skipped)}");
+        SwitchLogger.ForContext("INIT").Info("Issuer connections: {Count} ready (passive={Passive}, active={Active}, skipped={Skipped})", _issuerConnections.Count, passive.Count, active.Count, skipped.Count);
+        if (passive.Count > 0) SwitchLogger.ForContext("INIT").Debug("Passive: {PassiveList}", string.Join(", ", passive));
+        if (active.Count > 0)  SwitchLogger.ForContext("INIT").Debug("Active: {ActiveList}", string.Join(", ", active));
+        if (skipped.Count > 0) SwitchLogger.ForContext("INIT").Debug("Skipped: {SkippedList}", string.Join(", ", skipped));
     }
 
     /// <summary>
@@ -205,9 +215,9 @@ public class TcpSwitchServer : IDisposable
             // _statsTimer = new Timer(LogServerStats, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
             // _poolHealthTimer = new Timer(LogPoolHealth, null, TimeSpan.FromSeconds(30), TimeSpan.FromSeconds(30));
 
-            if (_pendingStore != null)
+            if (_unsettledStore != null)
             {
-                _cleanupTimer = new Timer(async _ => await _pendingStore.CleanupExpiredAsync(), 
+                _cleanupTimer = new Timer(async _ => await _unsettledStore.CleanupExpiredAsync(), 
                     null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
             }
 
@@ -229,7 +239,7 @@ public class TcpSwitchServer : IDisposable
 
                 _healthCheckTask = Task.Run(async () =>
                 {
-                    SwitchLogger.Info("[HEALTH] HTTP health check listening on port {Port}", port);
+                    SwitchLogger.ForContext("HEALTH").Info("HTTP health check listening on port {Port}", port);
                     while (_healthCheckListener.IsListening)
                     {
                         try
@@ -241,14 +251,14 @@ public class TcpSwitchServer : IDisposable
                         catch (ObjectDisposedException) { break; }
                         catch (Exception ex)
                         {
-                            SwitchLogger.Debug("[HEALTH] Error: {Error}", ex.Message);
+                            SwitchLogger.ForContext("HEALTH").Debug("Error: {Error}", ex.Message);
                         }
                     }
                 });
             }
             catch (Exception ex)
             {
-                SwitchLogger.Warn("[HEALTH] Failed to start health check endpoint: {Error}. " +
+                SwitchLogger.ForContext("HEALTH").Warn("Failed to start health check endpoint: {Error}. " +
                     "Run as admin or use: netsh http add urlacl url=http://+:{Port}/ user=Everyone", ex.Message);
             }
         }
@@ -345,24 +355,24 @@ public class TcpSwitchServer : IDisposable
         private void LogServerStats(object? state)
         {
             var stats = GetStats();
-            SwitchLogger.Debug($"[STATS] Active: {stats.ActiveConnections} | Total Msgs: {stats.TotalMessageCount}");
+            SwitchLogger.ForContext("STATS").Debug("Active: {ActiveConnections} | Total Msgs: {TotalMessages}", stats.ActiveConnections, stats.TotalMessageCount);
         }
-        
+
         private void LogPoolHealth(object? state)
         {
             var poolStats = _issuerConnector.GetPoolStats();
             int persistentConnected = _issuerConnections.Values.Count(c => c.IsAnyConnected);
-            SwitchLogger.Debug($"[POOL] Total: {poolStats.TotalPooledConnections} | Active: {poolStats.TotalActivedConnections} | H2H: {persistentConnected}/{_issuerConnections.Count}");
+            SwitchLogger.ForContext("POOL").Debug("Total: {Pooled} | Active: {Active} | H2H: {Connected}/{Total}", poolStats.TotalPooledConnections, poolStats.TotalActivedConnections, persistentConnected, _issuerConnections.Count);
         }
         
         private void OnTransactionTimeout(TransactionContext context)
         {
-            SwitchLogger.Warn($"[TIMEOUT] Transaction {context.TransactionId} timed out after {context.GetProcessingTime()?.TotalMilliseconds}ms");
+            SwitchLogger.ForContext("TIMEOUT").Warn("Transaction {TransactionId} timed out after {ElapsedMs}ms", context.TransactionId, context.GetProcessingTime()?.TotalMilliseconds);
         }
-        
+
         private void OnReversalRequired(TransactionContext context)
         {
-            SwitchLogger.Warn($"[REVERSAL] Auto-reversal required for transaction {context.TransactionId}");
+            SwitchLogger.ForContext("REVERSAL").Warn("Auto-reversal required for transaction {TransactionId}", context.TransactionId);
         }
 
         /// <summary>
@@ -374,7 +384,7 @@ public class TcpSwitchServer : IDisposable
                 .Select(m => $"{m.TSName}:{(m.IsAnyConnected ? "OK" : "--")}")
                 .ToList();
             int connected = _issuerConnections.Values.Count(m => m.IsAnyConnected);
-            SwitchLogger.Info($"[H2H] {string.Join(" | ", parts)}  ({connected}/{_issuerConnections.Count} connected)");
+            SwitchLogger.ForContext("H2H").Info("{StatusLine}  ({Connected}/{Total} connected)", string.Join(" | ", parts), connected, _issuerConnections.Count);
         }
 
         
@@ -423,7 +433,7 @@ public class TcpSwitchServer : IDisposable
                     _ = Task.Run(async () =>
                     {
                         try { await HandleClientAsync(client, port); }
-                        catch (Exception ex) { SwitchLogger.Error($"[ERROR] Unhandled exception on port {port}: {ex.Message}"); }
+                        catch (Exception ex) { SwitchLogger.ForContext("SERVER").Error("Unhandled exception on port {Port}: {Error}", port, ex.Message); }
                     });
                     
                     // Note: Active sessions count might include both ACQ and ISS sessions now
@@ -462,7 +472,7 @@ public class TcpSwitchServer : IDisposable
             bool hasManager = _issuerConnections.TryGetValue(issuerCode, out var manager);
             string issuerLabel = hasManager ? manager!.TSName : issuerCode;
 
-            SwitchLogger.Debug($"[H2H-PASSIVE] Incoming connection from {remoteEp} -> Identified Issuer: {issuerLabel}");
+            SwitchLogger.ForContext("H2H").Debug("Passive incoming from {RemoteEp} -> Issuer: {Issuer}", remoteEp, issuerLabel);
             MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"New connection on Port {((IPEndPoint)client.Client.LocalEndPoint).Port} -> Identified as Issuer: {issuerLabel}");
 
             if (hasManager)
@@ -472,14 +482,14 @@ public class TcpSwitchServer : IDisposable
                 bool accepted = await manager!.AcceptConnectionAsync(client);
                 if (!accepted)
                 {
-                    SwitchLogger.Warn($"[H2H-PASSIVE] ISS connection FAILED for {issuerLabel} from {remoteEp} (sign-on rejected)");
+                    SwitchLogger.ForContext("H2H").Warn("Passive ISS connection FAILED for {Issuer} from {RemoteEp} (sign-on rejected)", issuerLabel, remoteEp);
                     MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"Manager failed to accept connection for {issuerLabel}");
                     client.Close();
                 }
             }
             else
             {
-                SwitchLogger.Error($"[H2H-PASSIVE] No manager found for ISS {issuerLabel} - connection rejected");
+                SwitchLogger.ForContext("H2H").Error("No manager found for ISS {Issuer} - connection rejected", issuerLabel);
                 MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"Critical Error: No manager found for {issuerLabel}");
                 client.Close();
             }
@@ -676,9 +686,25 @@ public class TcpSwitchServer : IDisposable
 
                 if (MtiHelper.IsFinancialRequest(request.MessageType))
                 {
+                    // Duplicate transaction detection: STAN + AcquirerID + Date
+                    // STAN is only 6 digits and wraps — without this, a replayed 0200 is forwarded as fresh
+                    // Skip for advice messages (0420) — they can be legitimately re-sent per NAPAS spec
+                    if (!MtiHelper.IsAdvice(request.MessageType) && _unsettledStore != null)
+                    {
+                        string? stan = request.GetSTAN();
+                        string? acqId = request.GetAcquirerID();
+                        string? txnDate = request.GetField(7);
+                        if (!string.IsNullOrEmpty(stan) && await _unsettledStore.IsDuplicateAsync(stan, acqId, txnDate))
+                        {
+                            SwitchLogger.Warn("[{SessionId}] DUPLICATE detected: STAN={STAN} AcqID={AcqID} Date={Date}", sessionId, stan, acqId, txnDate);
+                            txnContext.TryTransitionTo(TransactionState.Failed, "94", "Duplicate transaction");
+                            return _parser.Build(IsoResponseBuilder.CreateErrorResponse(request, "94"));
+                        }
+                    }
+
                     var requestCopy = CloneWithEncryptedPan(request, encryptedPan);
                     // Fire-and-forget: database writes must not block the transaction hot path
-                    if (_pendingStore != null) _ = _pendingStore.StoreRequestAsync(txnContext.TransactionId, sessionId, requestCopy, messageBytes).ContinueWith(t => SwitchLogger.Error("[PENDING-STORE-ERROR] {Error}", t.Exception?.GetBaseException().Message), TaskContinuationOptions.OnlyOnFaulted);
+                    if (_unsettledStore != null) _ = _unsettledStore.StoreRequestAsync(txnContext.TransactionId, sessionId, requestCopy, messageBytes).ContinueWith(t => SwitchLogger.ForContext("UNSETTLED").Error("Store failed: {Error}", t.Exception?.GetBaseException().Message), TaskContinuationOptions.OnlyOnFaulted);
                     if (_transactionLogger != null) _ = _transactionLogger.LogRequestAsync(requestCopy, sessionId, "INBOUND");
                 }
 
@@ -702,16 +728,22 @@ public class TcpSwitchServer : IDisposable
 
                 if (!string.IsNullOrEmpty(txnContext.TRN)) response.SetTRN(txnContext.TRN);
                 
-                if (_pendingStore != null && MtiHelper.IsFinancialRequest(request.MessageType))
+                if (_unsettledStore != null && MtiHelper.IsFinancialRequest(request.MessageType) && !MtiHelper.IsAdvice(request.MessageType))
                 {
                     var correlationResult = _correlationValidator.ValidateResponseMatchesRequest(request, response);
                     if (!correlationResult.IsValid)
                     {
-                        await _pendingStore.MarkAsMismatchAsync(txnContext.TransactionId, "Correlation failed");
+                        await _unsettledStore.MarkAsMismatchAsync(txnContext.TransactionId, "Correlation failed");
                         txnContext.TryTransitionTo(TransactionState.Failed, "30", "Correlation failed");
                         response = IsoResponseBuilder.CreateErrorResponse(request, "30");
                     }
-                    else await _pendingStore.MarkAsMatchedAsync(txnContext.TransactionId, response.GetField(39) ?? "96");
+                    else await _unsettledStore.MarkAsMatchedAsync(txnContext.TransactionId, response.GetField(39) ?? "96");
+                }
+                else if (_unsettledStore != null && MtiHelper.IsAdvice(request.MessageType))
+                {
+                    // Advice messages (0420): we generate the 0430 RC=00 ourselves, no correlation needed.
+                    // Mark as matched immediately — ISS forwarding is tracked separately in the background.
+                    _ = _unsettledStore.MarkAsMatchedAsync(txnContext.TransactionId, "00");
                 }
 
                 txnContext.Response = response;
@@ -762,6 +794,19 @@ public class TcpSwitchServer : IDisposable
             return copy;
         }
 
+        private static IsoMessage CloneMessage(IsoMessage original)
+        {
+            var copy = new IsoMessage
+            {
+                MessageType = original.MessageType,
+                Header = original.Header,
+                PrimaryBitmap = original.PrimaryBitmap,
+                SecondaryBitmap = original.SecondaryBitmap
+            };
+            foreach (var f in original.Fields) copy.SetField(f.Key, f.Value);
+            return copy;
+        }
+
      
      
         private async Task<IsoMessage> HandleAuthorizationRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
@@ -770,7 +815,8 @@ public class TcpSwitchServer : IDisposable
             if (issuerBank == null) return IsoResponseBuilder.CreateErrorResponse(request, "15");
 
             PrepareMessageForRouting(request, issuerBank, sessionId);
-            
+            TranslatePinBlockForIssuer(request, issuerBank, sessionId);
+
             txnContext.TryTransitionTo(TransactionState.Routing);
             return await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
         }
@@ -823,6 +869,32 @@ public class TcpSwitchServer : IDisposable
         }
 
         /// <summary>
+        /// Translate PIN block (DE#52) from ACQ zone key to ISS zone key.
+        /// Without this, PIN transactions are declined with RC 55 by the issuer
+        /// because the PIN block is encrypted under the wrong key.
+        /// </summary>
+        private void TranslatePinBlockForIssuer(IsoMessage request, IssuerBankConfig issuerBank, string sessionId)
+        {
+            if (!request.HasField(52)) return;
+
+            try
+            {
+                string pinBlockHex = request.GetField(52)!;
+                byte[] pinBlockBytes = Convert.FromHexString(pinBlockHex);
+
+                string acqCode = request.GetField(32) ?? "DEFAULT";
+                byte[] translated = _securityProvider.TranslatePinBlock(pinBlockBytes, acqCode, issuerBank.IssuerCode);
+
+                request.SetField(52, Convert.ToHexString(translated));
+                SwitchLogger.Debug($"  [{sessionId}] DE#52 PIN block translated: ACQ({acqCode}) -> ISS({issuerBank.IssuerCode})");
+            }
+            catch (Exception ex)
+            {
+                SwitchLogger.Warn($"  [{sessionId}] PIN block translation failed: {ex.Message} — passing through raw (ISS may decline with RC 55)");
+            }
+        }
+
+        /// <summary>
         /// Route a message to the appropriate issuer.
         /// Connection strategy:
         ///   1. Persistent H2H channel (TSConnectionManager) — preferred for all bank connections.
@@ -847,14 +919,14 @@ public class TcpSwitchServer : IDisposable
 
                     if (isPassive)
                     {
-                         SwitchLogger.Info($" [{sessionId}] [ROUTING] Passive Issuer {issuerBank.IssuerName} is NOT connected. Cannot dial out.");
+                         SwitchLogger.ForContext("ROUTING").Info("Passive Issuer {Issuer} is NOT connected. Cannot dial out. Session={SessionId}", issuerBank.IssuerName, sessionId);
                          response = null;
                     }
                     else
                     {
                         // Emergency fallback: pool-based connection
                         if (!issuerBank.IsDefault)
-                            SwitchLogger.Warn($" [{sessionId}] [ROUTING] No active persistent connection for {issuerBank.IssuerName}, falling back to pool (investigate H2H link)");
+                            SwitchLogger.ForContext("ROUTING").Warn("No active persistent connection for {Issuer}, falling back to pool (investigate H2H link). Session={SessionId}", issuerBank.IssuerName, sessionId);
 
                         ServerMetrics.IncrementConnectionError();
                         response = await _issuerConnector.ForwardToIssuerAsync(request, issuerBank, sessionId, cancellationToken);
@@ -863,7 +935,7 @@ public class TcpSwitchServer : IDisposable
             }
             catch (Exception ex)
             {
-                SwitchLogger.Info($" [{sessionId}] Routing error: {ex.Message}");
+                SwitchLogger.ForContext("ROUTING").Error("Routing error for session {SessionId}: {Error}", sessionId, ex.Message);
             }
 
             if (response == null)
@@ -876,85 +948,153 @@ public class TcpSwitchServer : IDisposable
         }
 
 
-        /// Handle 0400 - Reversal Request (Void/Cancel)
+        /// Handle 0420 - Reversal/Void Advice
+        /// Per NAPAS spec: Respond immediately with 0430 RC=00 to ACQ, then forward to ISS asynchronously.
+        /// - Void (PC 00xxxx): Cancels a purchase before settlement. Always forwarded to ISS.
+        /// - Reversal: Corrects any transaction. Only forwarded if the original transaction is found.
 
-        private async Task<IsoMessage> HandleReversalAdviceAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
+        private Task<IsoMessage> HandleReversalAdviceAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
-            SwitchLogger.Info($" [{sessionId}] Processing reversal advice (0420)");
+            string? processingCode = request.GetProcessingCode();
+            bool isVoid = IsVoidAdvice(processingCode);
+            string txnType = isVoid ? "VOID" : "REVERSAL";
 
-            if (_pendingStore != null)
+            SwitchLogger.ForContext("ADVICE").Info("Processing {TxnType} advice (0420). Session={SessionId}, PC={PC}",
+                txnType, sessionId, processingCode ?? "N/A");
+
+            // Per NAPAS spec 4.1.2: Respond immediately with 0430 RC=00 to ACQ
+            var ackResponse = IsoResponseBuilder.CreateSuccessResponse(request);
+
+            if (isVoid) ServerMetrics.IncrementVoidAdvice();
+
+            // Clone the request for the background task — the main thread continues using
+            // the original `request` for logging/metrics, and Dictionary<int,string> is NOT
+            // thread-safe for concurrent read+write. Without this clone,
+            // PrepareMessageForRouting in the background task mutates Fields while the
+            // main thread may still be iterating over them, causing InvalidOperationException.
+            var requestClone = CloneMessage(request);
+
+            // Fire-and-forget: Forward to ISS asynchronously (ACQ does not wait)
+            _ = ForwardAdviceToIssuerAsync(requestClone, sessionId, txnContext, isVoid, cancellationToken);
+
+            txnContext.TryTransitionTo(TransactionState.Completed);
+            return Task.FromResult(ackResponse);
+        }
+
+        /// <summary>
+        /// Background task: Forward a 0420 advice to the issuer after the ACQ has been acknowledged.
+        /// For reversal: only forward if the original transaction is found in UnsettledTransactions.
+        /// For void: always forward (the original purchase must be cancelled at the issuer).
+        /// On failure, logs for SAF (Store and Forward) retry.
+        /// </summary>
+        private async Task ForwardAdviceToIssuerAsync(IsoMessage request, string sessionId, TransactionContext txnContext, bool isVoid, CancellationToken cancellationToken)
+        {
+            string txnType = isVoid ? "VOID" : "REVERSAL";
+            try
             {
-                string? trn = request.GetTRN();
-                if (!string.IsNullOrEmpty(trn))
+                // Settlement date check — NAPAS does not process reversals
+                // for transactions outside the current settlement date
+                string? settlementDate = request.GetField(15);
+                if (!string.IsNullOrEmpty(settlementDate))
                 {
-                    var original = await _pendingStore.GetRequestByTRNAsync(trn);
-                    if (original != null && !request.HasField(90))
+                    var vnTz = TimeZoneInfo.FindSystemTimeZoneById("SE Asia Standard Time");
+                    string currentDate = TimeZoneInfo.ConvertTimeFromUtc(DateTime.UtcNow, vnTz).ToString("MMdd");
+                    if (settlementDate != currentDate)
                     {
-                        request.SetField(90, IsoMessage.BuildDE90(
-                            original.MessageType, original.RequestSTAN, original.RequestDateTime,
-                            original.RequestAcquirerID, null));
-                        SwitchLogger.Debug($"  [{sessionId}] DE#90 built from original: {request.GetField(90)}");
-                    }
-                    else if (original == null)
-                    {
-                        SwitchLogger.Debug($"  [{sessionId}] [BG-VERIFY] Original NOT found for TRN: {trn}");
+                        SwitchLogger.ForContext("ADVICE").Warn(
+                            "{TxnType} settlement date mismatch: DE#15={DE15}, current={Current}. Not forwarding. Session={SessionId}",
+                            txnType, settlementDate, currentDate, sessionId);
+                        return;
                     }
                 }
-            }
 
-            // PCI-DSS/NAPAS compliance: Reject reversal advice without DE#90
-            // NAPAS will reject with RC 30 anyway, so decline early with RC 25
-            if (!request.HasField(90))
-            {
-                SwitchLogger.Warn($"  [{sessionId}] [REJECT] DE#90 missing on 0420 reversal advice - declining with RC 25");
-                txnContext.TryTransitionTo(TransactionState.Failed, "25", "Original transaction data missing (DE#90)");
-                return IsoResponseBuilder.CreateErrorResponse(request, "25");
-            }
-
-            try 
-            {
-                var issuerBank = GetIssuer(request, sessionId, txnContext);
-                if (issuerBank == null) 
+                // Look up original financial transaction (PURCHASE, etc.) from today's settlement.
+                // Must use GetOriginalForVoidReversalAsync — generic methods would return
+                // the void/reversal's own record (just stored+MATCHED with the same STAN).
+                UnsettledTransaction? original = null;
+                if (_unsettledStore != null)
                 {
-                     return IsoResponseBuilder.CreateErrorResponse(request, "92");
+                    string? trn = request.GetTRN();
+                    string? stan = request.GetSTAN();
+                    original = await _unsettledStore.GetOriginalForVoidReversalAsync(trn, stan);
+                }
+
+                // Reversal (not void): Only forward if original transaction is found
+                if (!isVoid && original == null)
+                {
+                    SwitchLogger.ForContext("ADVICE").Info(
+                        "Original transaction not found for {TxnType} advice. Not forwarding to ISS. Session={SessionId}",
+                        txnType, sessionId);
+                    return;
+                }
+
+                // Build DE#90 (Original Data Elements) from original if not already present
+                if (original != null && !request.HasField(90))
+                {
+                    request.SetField(90, IsoMessage.BuildDE90(
+                        original.MessageType, original.RequestSTAN, original.RequestDateTime,
+                        original.RequestAcquirerID, null));
+                    SwitchLogger.ForContext("ADVICE").Debug("DE#90 built from original. Session={SessionId}", sessionId);
+                }
+
+                var issuerBank = GetIssuer(request, sessionId, txnContext);
+                if (issuerBank == null)
+                {
+                    SwitchLogger.ForContext("ADVICE").Warn(
+                        "No issuer found for {TxnType} advice forwarding. Session={SessionId}", txnType, sessionId);
+                    return;
                 }
 
                 PrepareMessageForRouting(request, issuerBank, sessionId);
-                return await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
+                var issuerResponse = await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
+
+                string? rc = issuerResponse.GetField(39);
+                SwitchLogger.ForContext("ADVICE").Info(
+                    "ISS {TxnType} response: RC={RC}. Session={SessionId}", txnType, rc ?? "N/A", sessionId);
+
+                if (_transactionLogger != null)
+                    _ = _transactionLogger.LogTransactionAsync(request, issuerResponse, sessionId, 0, "ADVICE");
             }
             catch (Exception ex)
             {
-                SwitchLogger.Info($" [{sessionId}] [ISS-ERROR] Error handling reversal: {ex.Message}");
-                return IsoResponseBuilder.CreateErrorResponse(request, "96");
+                SwitchLogger.ForContext("ADVICE").Error(
+                    "Failed to forward {TxnType} advice to ISS. Session={SessionId}, Error={Error}. SAF retry needed.",
+                    txnType, sessionId, ex.Message);
             }
+        }
 
+        /// <summary>
+        /// Check if a 0420 advice is a Void (purchase cancellation) vs. a generic Reversal.
+        /// Void uses processing code 00xxxx (purchase transaction type).
+        /// </summary>
+        private static bool IsVoidAdvice(string? processingCode)
+        {
+            return !string.IsNullOrEmpty(processingCode) && processingCode.Length >= 2 && processingCode.StartsWith("00");
         }
 
         private async Task<IsoMessage> HandleReversalRequestAsync(IsoMessage request, string sessionId, TransactionContext txnContext, CancellationToken cancellationToken = default)
         {
             SwitchLogger.Info($" [{sessionId}] Processing reversal request");
             
-            if (_pendingStore != null)
+            if (_unsettledStore != null)
             {
                 string? trn = request.GetTRN();
-                if (!string.IsNullOrEmpty(trn))
+                string? stan = request.GetSTAN();
+                var original = await _unsettledStore.GetOriginalForVoidReversalAsync(trn, stan);
+                if (original == null)
                 {
-                    var original = await _pendingStore.GetRequestByTRNAsync(trn);
-                    if (original == null)
-                    {
-                        SwitchLogger.Debug($"  [{sessionId}] Original transaction not found for TRN: {trn}");
-                        txnContext.TryTransitionTo(TransactionState.Reversed, "25", "Original transaction not found");
-                        return IsoResponseBuilder.CreateErrorResponse(request, "25");
-                    }
-                    SwitchLogger.Debug($"  [{sessionId}] Original transaction found and verified via TRN: {trn}");
+                    SwitchLogger.Debug($"  [{sessionId}] Original transaction not found for reversal (TRN: {trn}, STAN: {stan})");
+                    txnContext.TryTransitionTo(TransactionState.Reversed, "25", "Original transaction not found");
+                    return IsoResponseBuilder.CreateErrorResponse(request, "25");
+                }
+                SwitchLogger.Debug($"  [{sessionId}] Original transaction found: {original.TransactionId} (Type: {original.TransactionType})");
 
-                    if (!request.HasField(90))
-                    {
-                        request.SetField(90, IsoMessage.BuildDE90(
-                            original.MessageType, original.RequestSTAN, original.RequestDateTime,
-                            original.RequestAcquirerID, null));
-                        SwitchLogger.Debug($"  [{sessionId}] DE#90 built from original: {request.GetField(90)}");
-                    }
+                if (!request.HasField(90))
+                {
+                    request.SetField(90, IsoMessage.BuildDE90(
+                        original.MessageType, original.RequestSTAN, original.RequestDateTime,
+                        original.RequestAcquirerID, null));
+                    SwitchLogger.Debug($"  [{sessionId}] DE#90 built from original: {request.GetField(90)}");
                 }
             }
 
@@ -1200,12 +1340,12 @@ public class TcpSwitchServer : IDisposable
             var drainDeadline = DateTime.UtcNow.AddSeconds(30);
             while (_activeSessions.Count > 0 && DateTime.UtcNow < drainDeadline)
             {
-                SwitchLogger.Info("[DISPOSE] Waiting for {SessionCount} active session(s) to drain...", _activeSessions.Count);
+                SwitchLogger.ForContext("DISPOSE").Info("Waiting for {SessionCount} active session(s) to drain...", _activeSessions.Count);
                 Thread.Sleep(1000);
             }
             if (_activeSessions.Count > 0)
             {
-                SwitchLogger.Info("[DISPOSE] Drain timeout: {SessionCount} session(s) still active, proceeding with shutdown", _activeSessions.Count);
+                SwitchLogger.ForContext("DISPOSE").Info("Drain timeout: {SessionCount} session(s) still active, proceeding with shutdown", _activeSessions.Count);
             }
 
             // Gracefully disconnect from all persistent issuer connections
@@ -1218,7 +1358,7 @@ public class TcpSwitchServer : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    SwitchLogger.Error("[DISPOSE] Error cleaning up manager: {Error}", ex.Message);
+                    SwitchLogger.ForContext("DISPOSE").Error("Error cleaning up manager: {Error}", ex.Message);
                 }
             }
             _issuerConnections.Clear();
@@ -1232,7 +1372,7 @@ public class TcpSwitchServer : IDisposable
             _transactionLogger?.Dispose();
             _stateMachine?.Dispose();
             
-            SwitchLogger.Info($"[DISPOSE] TcpSwitchServer disposed");
+            SwitchLogger.ForContext("DISPOSE").Info("TcpSwitchServer disposed");
         }
 
         private static bool LooksLikeHexAscii(byte[] data)

@@ -78,7 +78,7 @@ namespace core.Security
             }
 
             _keys = LoadOrCreateKeys();
-            SwitchLogger.Warn("[HSM] Using software HSM stub — NOT FOR PRODUCTION");
+            SwitchLogger.ForContext("HSM").Warn("Using software HSM stub — NOT FOR PRODUCTION");
         }
 
         private static Dictionary<string, byte[]> LoadOrCreateKeys()
@@ -94,14 +94,14 @@ namespace core.Security
                         var keys = new Dictionary<string, byte[]>();
                         foreach (var kvp in stored)
                             keys[kvp.Key] = Convert.FromBase64String(kvp.Value);
-                        SwitchLogger.Info("[HSM] Loaded persisted stub keys from {Path}", Path.GetFileName(KeyFilePath));
+                        SwitchLogger.ForContext("HSM").Info("Loaded persisted stub keys from {Path}", Path.GetFileName(KeyFilePath));
                         return keys;
                     }
                 }
             }
             catch (Exception ex)
             {
-                SwitchLogger.Warn("[HSM] Failed to load persisted keys: {Error}. Generating new keys.", ex.Message);
+                SwitchLogger.ForContext("HSM").Warn("Failed to load persisted keys: {Error}. Generating new keys.", ex.Message);
             }
 
             // Generate fresh keys and persist them
@@ -124,11 +124,11 @@ namespace core.Security
                     serializable[kvp.Key] = Convert.ToBase64String(kvp.Value);
 
                 File.WriteAllText(KeyFilePath, JsonSerializer.Serialize(serializable, new JsonSerializerOptions { WriteIndented = true }));
-                SwitchLogger.Info("[HSM] Generated and persisted new stub keys to {Path}", Path.GetFileName(KeyFilePath));
+                SwitchLogger.ForContext("HSM").Info("Generated and persisted new stub keys to {Path}", Path.GetFileName(KeyFilePath));
             }
             catch (Exception ex)
             {
-                SwitchLogger.Warn("[HSM] Failed to persist keys: {Error}. Keys will be lost on restart!", ex.Message);
+                SwitchLogger.ForContext("HSM").Warn("Failed to persist keys: {Error}. Keys will be lost on restart!", ex.Message);
             }
 
             return newKeys;
