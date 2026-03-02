@@ -38,13 +38,14 @@ public class TcpSwitchServer : IDisposable
     private readonly SecureDataHandler _securityProvider;
     private readonly UnsettledTransactionStore? _unsettledStore;
     private readonly ResponseCorrelationValidator _correlationValidator;
+    private readonly MessageFramer _framer = new(MessageFramer.LengthHeaderFormat.Ascii4Byte);
+    private readonly HealthCheckServer _healthCheck;
+    private readonly SafRetryQueue? _safQueue;
     private bool _disposed;
     private Timer? _statsTimer;
     private Timer? _poolHealthTimer;
     private Timer? _cleanupTimer;
     private CancellationTokenSource? _serverCts;
-    private HttpListener? _healthCheckListener;
-    private Task? _healthCheckTask;
 
     // Persistent connection managers for all issuers
     private readonly ConcurrentDictionary<string, TSConnectionManager> _issuerConnections = new();
@@ -94,6 +95,9 @@ public class TcpSwitchServer : IDisposable
         }
         _securityProvider = new SecureDataHandler(hsmProvider);
         _correlationValidator = new ResponseCorrelationValidator();
+        _healthCheck = new HealthCheckServer(
+            () => _isRunning, () => GetStats(), () => _stateMachine.GetStats(),
+            _issuerConnections, _serverStartTime);
 
         _stateMachine.OnTransactionTimeout += OnTransactionTimeout;
         _stateMachine.OnReversalRequired += OnReversalRequired;
@@ -108,7 +112,8 @@ public class TcpSwitchServer : IDisposable
         {
             _transactionLogger = new TransactionLogger(dbConnectionString, enableLogging, _securityProvider);
             _unsettledStore = new UnsettledTransactionStore(dbConnectionString, expirationMinutes: 5, _securityProvider);
-            SwitchLogger.ForContext("INIT").Info("Transaction logger and unsettled store initialized");
+            _safQueue = new SafRetryQueue(async entry => await RetrySafAdviceAsync(entry));
+            SwitchLogger.ForContext("INIT").Info("Transaction logger, unsettled store, and SAF queue initialized");
         }
         else
         {
@@ -221,135 +226,18 @@ public class TcpSwitchServer : IDisposable
                     null, TimeSpan.FromMinutes(1), TimeSpan.FromMinutes(1));
             }
 
-            // Start HTTP health check endpoint for load balancers / Kubernetes probes
-            StartHealthCheckEndpoint();
-        }
-
-        private void StartHealthCheckEndpoint()
-        {
-            try
-            {
-                var serverConfig = ConfigurationLoader.Instance.ServerConfig;
-                int port = serverConfig.Settings.HealthCheckPort;
-                if (port <= 0) return;
-
-                _healthCheckListener = new HttpListener();
-                _healthCheckListener.Prefixes.Add($"http://+:{port}/");
-                _healthCheckListener.Start();
-
-                _healthCheckTask = Task.Run(async () =>
-                {
-                    SwitchLogger.ForContext("HEALTH").Info("HTTP health check listening on port {Port}", port);
-                    while (_healthCheckListener.IsListening)
-                    {
-                        try
-                        {
-                            var ctx = await _healthCheckListener.GetContextAsync();
-                            await HandleHealthCheckRequestAsync(ctx);
-                        }
-                        catch (HttpListenerException) { break; }
-                        catch (ObjectDisposedException) { break; }
-                        catch (Exception ex)
-                        {
-                            SwitchLogger.ForContext("HEALTH").Debug("Error: {Error}", ex.Message);
-                        }
-                    }
-                });
-            }
-            catch (Exception ex)
-            {
-                SwitchLogger.ForContext("HEALTH").Warn("Failed to start health check endpoint: {Error}. " +
-                    "Run as admin or use: netsh http add urlacl url=http://+:{Port}/ user=Everyone", ex.Message);
-            }
+            _healthCheck.Start();
         }
 
         private async Task HandleHealthCheckRequestAsync(HttpListenerContext ctx)
         {
-            var request = ctx.Request;
-            var response = ctx.Response;
-
-            try
-            {
-                string path = request.Url?.AbsolutePath?.TrimEnd('/') ?? "";
-
-                string json;
-                int statusCode;
-
-                switch (path)
-                {
-                    case "/health":
-                    case "":
-                        statusCode = _isRunning ? 200 : 503;
-                        json = BuildHealthJson();
-                        break;
-                    case "/health/ready":
-                        bool hasConnections = _issuerConnections.Values.Any(c => c.IsAnyConnected);
-                        statusCode = (_isRunning && hasConnections) ? 200 : 503;
-                        json = JsonSerializer.Serialize(new { status = statusCode == 200 ? "ready" : "not_ready", isRunning = _isRunning, issuerConnections = hasConnections });
-                        break;
-                    case "/metrics":
-                        statusCode = 200;
-                        json = ServerMetrics.ToJson();
-                        break;
-                    default:
-                        statusCode = 404;
-                        json = "{\"error\":\"not_found\"}";
-                        break;
-                }
-
-                response.StatusCode = statusCode;
-                response.ContentType = "application/json";
-                byte[] body = Encoding.UTF8.GetBytes(json);
-                response.ContentLength64 = body.Length;
-                await response.OutputStream.WriteAsync(body, 0, body.Length);
-            }
-            catch (Exception ex)
-            {
-                SwitchLogger.Debug("[HEALTH] Response error: {Error}", ex.Message);
-            }
-            finally
-            {
-                try { response.Close(); } catch { }
-            }
+            // Delegated to HealthCheckServer — this method kept for backward compat only
+            await Task.CompletedTask;
         }
 
         private string BuildHealthJson()
         {
-            var stats = GetStats();
-            var txnStats = _stateMachine.GetStats();
-            int persistentConnected = _issuerConnections.Values.Count(c => c.IsAnyConnected);
-
-            var connections = new Dictionary<string, object>();
-            foreach (var kvp in _issuerConnections)
-            {
-                connections[kvp.Key] = new { connected = kvp.Value.IsAnyConnected };
-            }
-
-            var health = new
-            {
-                status = _isRunning ? "healthy" : "unhealthy",
-                uptime = (DateTime.UtcNow - _serverStartTime).ToString(@"d\.hh\:mm\:ss"),
-                activeConnections = stats.ActiveConnections,
-                totalMessages = stats.TotalMessageCount,
-                tps = ServerMetrics.GetTransactionsPerSecond(),
-                transactions = new
-                {
-                    pending = txnStats.RoutingCount,
-                    completed = txnStats.CompletedCount,
-                    failed = txnStats.FailedCount,
-                    reversing = txnStats.ReversingCount,
-                    active = txnStats.ActiveTransactions
-                },
-                issuerConnections = new
-                {
-                    connected = persistentConnected,
-                    total = _issuerConnections.Count,
-                    details = connections
-                },
-                timestamp = DateTime.UtcNow.ToString("o")
-            };
-
-            return JsonSerializer.Serialize(health, new JsonSerializerOptions { WriteIndented = true });
+            return "{}"; // Delegated to HealthCheckServer
         }
         
         private void LogServerStats(object? state)
@@ -526,79 +414,21 @@ public class TcpSwitchServer : IDisposable
                 stream.ReadTimeout = 30000;
                 stream.WriteTimeout = 30000;
 
-                // Message processing loop - keep reading messages from this client
+                // Message processing loop — single wire format, no guessing
                 while (client.Connected && _isRunning)
                 {
-                    // Step 1: Read message length header
-                    // Client team says header is 4 bytes ASCII (e.g., "0123")
-                    byte[]? lengthBytes = ReadExactOrNull(stream, 4);
-                    if (lengthBytes == null) break; // Client disconnected
-
-                    int messageLength;
-                    string lengthStr = System.Text.Encoding.ASCII.GetString(lengthBytes);
-
-                    if (int.TryParse(lengthStr, out int asciiLen) && asciiLen > 0 && asciiLen < 2000)
-                    {
-                        messageLength = asciiLen;
-                        SwitchLogger.Debug($"  [{sessionId}] Detected 4-byte ASCII length header: {lengthStr} (len={messageLength})");
-                    }
-                    else
-                    {
-                        // Fallback: try to interpret the 4 bytes as Big-Endian binary (some clients might still use this)
-                        int binLen4 = (lengthBytes[0] << 24) | (lengthBytes[1] << 16) | (lengthBytes[2] << 8) | lengthBytes[3];
-                        
-                        // Or try 2-byte binary (legacy) if the first 2 bytes were actually the length and we over-read
-                        int binLen2 = (lengthBytes[0] << 8) | lengthBytes[1];
-
-                        if (binLen4 > 0 && binLen4 < 2000)
-                        {
-                            messageLength = binLen4;
-                            SwitchLogger.Debug($"  [{sessionId}] Detected 4-byte binary length header. len={messageLength}");
-                        }
-                        else if (binLen2 > 0 && binLen2 < 2000)
-                        {
-                            messageLength = binLen2;
-                            SwitchLogger.Debug($"  [{sessionId}] Detected 2-byte binary length header (over-read 2 bytes). len={messageLength}");
-                        }
-                        else
-                        {
-                            SwitchLogger.Debug($"  [{sessionId}] Invalid message length header: {BitConverter.ToString(lengthBytes)}");
-                            break;
-                        }
-                    }
-
-                    // Step 2: Read the actual ISO-8583 message
-                    byte[]? messageBytes = ReadExactOrNull(stream, messageLength);
-                    if (messageBytes == null)
-                    {
-                        SwitchLogger.Debug($"  [{sessionId}] Incomplete message (expected {messageLength} bytes)");
-                        break;
-                    }
-
-                    SwitchLogger.Info($" [{sessionId}] Received {messageLength} bytes");
+                    byte[]? messageBytes = _framer.ReadMessage(stream, sessionId);
+                    if (messageBytes == null) break;
 
                     PrintRawMessage(messageBytes, sessionId);
 
-                    byte[] isoPayload = messageBytes;
+                    byte[]? responseBytes = await ProcessMessageAsync(messageBytes, sessionId, _serverCts?.Token ?? CancellationToken.None);
 
-                    // Step 3: Process the message and get response
-                    byte[]? responseBytes = await ProcessMessageAsync(isoPayload, sessionId, _serverCts?.Token ?? CancellationToken.None);
-
-                    // Step 4: Send response back to client
                     if (responseBytes != null && responseBytes.Length > 0)
                     {
-                        // Write length header (4-byte ASCII per NAPAS specification)
-                        string respLengthStr = responseBytes.Length.ToString("D4");
-                        byte[] lengthHeader = System.Text.Encoding.ASCII.GetBytes(respLengthStr);
- 
-                        stream.Write(lengthHeader, 0, 4);
-                        stream.Write(responseBytes, 0, responseBytes.Length);
-                        stream.Flush();
- 
-                        SwitchLogger.Info($" [{sessionId}] Sent {responseBytes.Length} bytes response (Length Header: {respLengthStr})\n");
+                        _framer.WriteMessage(stream, responseBytes, sessionId);
                     }
 
-                    // Update session stats
                     session.MessageCount++;
                     session.LastActivity = DateTime.Now;
                 }
@@ -1058,8 +888,38 @@ public class TcpSwitchServer : IDisposable
             catch (Exception ex)
             {
                 SwitchLogger.ForContext("ADVICE").Error(
-                    "Failed to forward {TxnType} advice to ISS. Session={SessionId}, Error={Error}. SAF retry needed.",
+                    "Failed to forward {TxnType} advice to ISS. Session={SessionId}, Error={Error}. Queuing for SAF retry.",
                     txnType, sessionId, ex.Message);
+                _safQueue?.Enqueue(request, sessionId, isVoid);
+            }
+        }
+
+        /// <summary>
+        /// SAF retry callback: Re-attempt to forward a failed advice to the issuer.
+        /// </summary>
+        private async Task<bool> RetrySafAdviceAsync(SafEntry entry)
+        {
+            try
+            {
+                var issuerBank = GetIssuer(entry.Request, entry.SessionId,
+                    _stateMachine.CreateTransaction(entry.SessionId, entry.Request));
+                if (issuerBank == null) return false;
+
+                PrepareMessageForRouting(entry.Request, issuerBank, entry.SessionId);
+                var response = await RouteMessageAsync(entry.Request, issuerBank, entry.SessionId,
+                    _stateMachine.CreateTransaction(entry.SessionId, entry.Request), CancellationToken.None);
+
+                string? rc = response.GetField(39);
+                bool success = rc == "00";
+                SwitchLogger.ForContext("SAF").Info(
+                    "SAF retry {Result} for session {SessionId}: RC={RC}",
+                    success ? "succeeded" : "failed", entry.SessionId, rc ?? "N/A");
+                return success;
+            }
+            catch (Exception ex)
+            {
+                SwitchLogger.ForContext("SAF").Error("SAF retry error for session {SessionId}: {Error}", entry.SessionId, ex.Message);
+                return false;
             }
         }
 
@@ -1366,7 +1226,8 @@ public class TcpSwitchServer : IDisposable
             _statsTimer?.Dispose();
             _poolHealthTimer?.Dispose();
             _cleanupTimer?.Dispose();
-            try { _healthCheckListener?.Stop(); _healthCheckListener?.Close(); } catch { }
+            _healthCheck.Dispose();
+            _safQueue?.Dispose();
             _serverCts?.Dispose();
             _issuerConnector?.Dispose();
             _transactionLogger?.Dispose();

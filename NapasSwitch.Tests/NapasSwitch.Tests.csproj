@@ -19,6 +19,8 @@
 
   <ItemGroup>
     <ProjectReference Include="..\Components\NapasSwitch.Data\NapasSwitch.Data.csproj" />
+    <ProjectReference Include="..\Components\NapasSwitch.Network\NapasSwitch.Network.csproj" />
+    <ProjectReference Include="..\NapasSwitch.Server\NapasSwitch.Server.csproj" />
   </ItemGroup>
 
 </Project>
