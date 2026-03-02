@@ -1,6 +1,8 @@
 using System;
+using System.IO;
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.Json;
 using core.Helpers;
 
 namespace core.Security
@@ -53,26 +55,83 @@ namespace core.Security
         byte[] GenerateWorkingKey(string masterKeyId);
     }
 
-    
-    /// Software-based HSM stub for development/testing
-    /// WARNING: DO NOT USE IN PRODUCTION - Use real HSM!
-    
+
+    /// Software-based HSM stub for development/testing.
+    /// Keys are persisted to a local file so encrypted data survives restarts.
+    /// WARNING: DO NOT USE IN PRODUCTION — Use a real HSM (Thales payShield, Futurex, AWS CloudHSM)
+    /// with persisted, versioned keys managed via a proper KMS.
+
     public class SoftwareHsmStub : IHsmProvider
     {
         private readonly Dictionary<string, byte[]> _keys;
+        private static readonly string KeyFilePath = Path.Combine(
+            AppDomain.CurrentDomain.BaseDirectory, "Config", "hsm_stub_keys.json");
 
         public SoftwareHsmStub()
         {
-            _keys = new Dictionary<string, byte[]>();
-            
-            // Initialize with test keys (32 bytes for AES-256)
-            // In production, these would be loaded from HSM
-            _keys["ZMK_ACQ"] = GenerateRandomKey(32);
-            _keys["ZMK_ISS"] = GenerateRandomKey(32);
-            _keys["MAC_KEY"] = GenerateRandomKey(32);
-            _keys["DATA_KEY"] = GenerateRandomKey(32);
-            
-            SwitchLogger.Warn("[HSM] Using software HSM stub — NOT FOR PRODUCTION");
+            string? allowStub = Environment.GetEnvironmentVariable("ALLOW_HSM_STUB");
+            if (!string.Equals(allowStub, "true", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new NotSupportedException(
+                    "SoftwareHsmStub is disabled. Set environment variable ALLOW_HSM_STUB=true to enable it. " +
+                    "DO NOT use this in production — use a real HSM (Thales payShield, Futurex, AWS CloudHSM).");
+            }
+
+            _keys = LoadOrCreateKeys();
+            SwitchLogger.ForContext("HSM").Warn("Using software HSM stub — NOT FOR PRODUCTION");
+        }
+
+        private static Dictionary<string, byte[]> LoadOrCreateKeys()
+        {
+            try
+            {
+                if (File.Exists(KeyFilePath))
+                {
+                    var json = File.ReadAllText(KeyFilePath);
+                    var stored = JsonSerializer.Deserialize<Dictionary<string, string>>(json);
+                    if (stored != null && stored.Count > 0)
+                    {
+                        var keys = new Dictionary<string, byte[]>();
+                        foreach (var kvp in stored)
+                            keys[kvp.Key] = Convert.FromBase64String(kvp.Value);
+                        SwitchLogger.ForContext("HSM").Info("Loaded persisted stub keys from {Path}", Path.GetFileName(KeyFilePath));
+                        return keys;
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                SwitchLogger.ForContext("HSM").Warn("Failed to load persisted keys: {Error}. Generating new keys.", ex.Message);
+            }
+
+            // Generate fresh keys and persist them
+            var newKeys = new Dictionary<string, byte[]>
+            {
+                ["ZMK_ACQ"] = GenerateRandomKey(32),
+                ["ZMK_ISS"] = GenerateRandomKey(32),
+                ["MAC_KEY"] = GenerateRandomKey(32),
+                ["DATA_KEY"] = GenerateRandomKey(32)
+            };
+
+            try
+            {
+                var dir = Path.GetDirectoryName(KeyFilePath);
+                if (!string.IsNullOrEmpty(dir) && !Directory.Exists(dir))
+                    Directory.CreateDirectory(dir);
+
+                var serializable = new Dictionary<string, string>();
+                foreach (var kvp in newKeys)
+                    serializable[kvp.Key] = Convert.ToBase64String(kvp.Value);
+
+                File.WriteAllText(KeyFilePath, JsonSerializer.Serialize(serializable, new JsonSerializerOptions { WriteIndented = true }));
+                SwitchLogger.ForContext("HSM").Info("Generated and persisted new stub keys to {Path}", Path.GetFileName(KeyFilePath));
+            }
+            catch (Exception ex)
+            {
+                SwitchLogger.ForContext("HSM").Warn("Failed to persist keys: {Error}. Keys will be lost on restart!", ex.Message);
+            }
+
+            return newKeys;
         }
 
         public byte[] EncryptPinBlock(byte[] clearPinBlock, string keyId)

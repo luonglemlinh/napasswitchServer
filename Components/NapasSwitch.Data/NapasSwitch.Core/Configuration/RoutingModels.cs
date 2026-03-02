@@ -43,6 +43,15 @@ namespace core.Models.Configuration
         /// </summary>
         public bool IsDefault { get; set; } = false;
 
+        /// <summary>
+        /// Wire format for the issuer's connection.
+        /// Controls how length headers are read/written.
+        /// Values: "ASCII4" (4-byte ASCII, e.g. "0123"), "BIN2" (2-byte big-endian binary), 
+        ///         "BIN4" (4-byte big-endian binary), "NONE" (no length header, raw MTI start).
+        /// Default: "BIN2" for backward compatibility.
+        /// </summary>
+        public string WireFormat { get; set; } = "BIN2";
+
         [XmlArray("Bins")]
         [XmlArrayItem("Bin")]
         public List<string> Bins { get; set; } = new();

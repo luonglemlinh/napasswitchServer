@@ -18,9 +18,14 @@ namespace core.Helpers
             if (string.IsNullOrEmpty(mti))
                 return "UNKNOWN";
 
-            // Reversal messages (0400/0410/0420/0430)
+            // Reversal/Void messages (0400/0410/0420/0430)
             if (mti.StartsWith("04"))
+            {
+                // Void = 0420 with purchase processing code (00xxxx)
+                if ((mti == "0420" || mti == "0430") && !string.IsNullOrEmpty(processingCode) && processingCode.StartsWith("00"))
+                    return "VOID";
                 return "REVERSAL";
+            }
 
             // For financial messages (0200/0210), check processing code
             if (mti == "0200" || mti == "0210")
@@ -69,6 +74,7 @@ namespace core.Helpers
                 "BALANCE_INQUIRY" => "Balance Inquiry",
                 "TRANSFER" => "Transfer",
                 "REFUND" => "Refund",
+                "VOID" => "Void",
                 "REVERSAL" => "Reversal",
                 "NETWORK_MGMT" => "Network Management",
                 "FINANCIAL" => "Financial Transaction",

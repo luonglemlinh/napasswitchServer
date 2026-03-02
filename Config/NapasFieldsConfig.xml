@@ -496,13 +496,13 @@
     </DataElement>
 
     <!-- DE#120 -->
-    <DataElement Number="120" Name="DE120_RecordData" Description="Record data (private use)">
+    <DataElement Number="120" Name="DE120_RecordData" Description="Beneficial Card holder or Account holder Information">
       <MinLength>1</MinLength>
-      <MaxLength>999</MaxLength>
+      <MaxLength>70</MaxLength>
       <DataType>ANS</DataType>
       <RequiredIn></RequiredIn>
       <ErrorCode>96</ErrorCode>
-      <ErrorMessage>Invalid record data</ErrorMessage>
+      <ErrorMessage>Invalid Beneficial Card holder or Account holder Information</ErrorMessage>
     </DataElement>
 
     <!-- DE#123 -->
@@ -517,7 +517,7 @@
     </DataElement>
 
     <!-- DE#128 -->
-    <DataElement Number="128" Name="" Description="">
+    <DataElement Number="128" Name="DE128_MAC" Description="Message Authentication Code">
       <MinLength>16</MinLength>
       <MaxLength>16</MaxLength>
       <DataType>AN</DataType>

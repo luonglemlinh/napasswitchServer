@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <DatabaseConfiguration>
-    <ConnectionString>Server=localhost;Database=NAPASSwitch;Integrated Security=true;</ConnectionString>
+    <!-- Connection string MUST be provided via NAPAS_DB_CONNECTION_STRING environment variable.
+         Do NOT store connection strings in this file. This is a PCI-DSS requirement.
+         Example: set NAPAS_DB_CONNECTION_STRING=Server=localhost;Database=NAPASSwitch;Integrated Security=true;TrustServerCertificate=true; -->
+    <ConnectionString></ConnectionString>
     <EnableLogging>true</EnableLogging>
     <CommandTimeout>30</CommandTimeout>
 </DatabaseConfiguration>

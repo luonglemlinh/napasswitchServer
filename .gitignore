@@ -5,3 +5,7 @@
 *.suo
 Logs/
 *.log
+/changes.md
+
+# Security: never commit keys or connection strings
+hsm_stub_keys.json

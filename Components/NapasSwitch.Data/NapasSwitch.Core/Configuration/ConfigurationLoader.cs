@@ -8,11 +8,32 @@ using core.Models.Configuration;
 
 namespace core.Configuration
 {
-    
+
+    /// Abstraction for configuration loading — enables mocking and DI registration.
+    /// Register as singleton in a DI container to replace the static Instance accessor.
+
+    public interface IConfigurationLoader
+    {
+        void LoadConfigurations(string configDirectory);
+        IssuerBankConfig? GetIssuerByBIN(string cardBIN);
+        IssuerBankConfig? GetIssuerByCode(string issuerCode);
+        AcquirerConfig? GetAcquirerByCode(string acquirerCode);
+        string GetResponseDescription(string responseCode);
+        List<IssuerBankConfig> GetAllIssuers();
+        List<AcquirerConfig> GetAllAcquirers();
+        bool IsBINRoutable(string cardBIN);
+        ConfigurationStats GetStats();
+        DatabaseConfiguration DatabaseConfig { get; }
+        ServerConfiguration ServerConfig { get; }
+    }
+
+
     /// Loads and manages all XML configuration files for the switch
-    /// This is a Singleton - only one instance exists throughout the application
-    
-    public class ConfigurationLoader
+    /// Implements IConfigurationLoader for testability.
+    /// The static Instance property is kept for backward compatibility but
+    /// new code should accept IConfigurationLoader via constructor injection.
+
+    public class ConfigurationLoader : IConfigurationLoader
     {
         private static ConfigurationLoader? _instance;
         private static readonly object _lock = new object();
@@ -67,45 +88,60 @@ namespace core.Configuration
             if (!Directory.Exists(configDirectory))
                 throw new DirectoryNotFoundException($"Config directory not found: {configDirectory}");
 
-            SwitchLogger.Info($"[CONFIG] Loading configurations from: {Path.GetFileName(configDirectory)}/");
+            SwitchLogger.ForContext("CONFIG").Info("Loading configurations from: {ConfigDir}/", Path.GetFileName(configDirectory));
 
             // Load BIN Routing
             string binConfigPath = Path.Combine(configDirectory, "BINconfig.xml");
             _binRouting = LoadXmlConfig<BinRoutingConfiguration>(binConfigPath);
             BuildBinToIssuerMap();
-            SwitchLogger.Info($"[CONFIG] Loaded {_binRouting.Banks.Count} issuer banks with {_binToIssuerMap.Count} total BINs");
+            SwitchLogger.ForContext("CONFIG").Info("Loaded {BankCount} issuer banks with {BinCount} total BINs", _binRouting.Banks.Count, _binToIssuerMap.Count);
 
             // Load Acquirer Routing
             string acqConfigPath = Path.Combine(configDirectory, "ACQconfig.xml");
             _acquirerRouting = LoadXmlConfig<AcquirerRoutingConfiguration>(acqConfigPath);
             BuildAcquirerMap();
-            SwitchLogger.Info($"[CONFIG] Loaded {_acquirerRouting.Acquirers.Count} acquirer banks");
+            SwitchLogger.ForContext("CONFIG").Info("Loaded {AcqCount} acquirer banks", _acquirerRouting.Acquirers.Count);
 
             // Load Response Codes
             string rcConfigPath = Path.Combine(configDirectory, "RCconfig.xml");
             _responseCodes = LoadXmlConfig<ResponseCodeConfiguration>(rcConfigPath);
             BuildResponseCodeMap();
-            SwitchLogger.Info($"[CONFIG] Loaded {_responseCodes.Codes.Count} response codes");
+            SwitchLogger.ForContext("CONFIG").Info("Loaded {CodeCount} response codes", _responseCodes.Codes.Count);
 
             // Load Database Configuration
             string dbConfigPath = Path.Combine(configDirectory, "DBconfig.xml");
             if (File.Exists(dbConfigPath))
             {
                 _databaseConfig = LoadXmlConfig<DatabaseConfiguration>(dbConfigPath);
-                SwitchLogger.Info($"[CONFIG] Loaded database configuration (Logging: {_databaseConfig.EnableLogging})");
+                SwitchLogger.ForContext("CONFIG").Info("Loaded database configuration (Logging: {Enabled})", _databaseConfig.EnableLogging);
             }
             else
             {
-                SwitchLogger.Info($"[CONFIG] WARNING: DBconfig.xml not found, database logging disabled");
+                SwitchLogger.ForContext("CONFIG").Warn("DBconfig.xml not found, database logging disabled");
                 _databaseConfig = new DatabaseConfiguration { EnableLogging = false };
             }
 
             // Allow environment variable to override the connection string
+            // PCI-DSS: Connection strings must NOT be stored in config files on disk.
+            // The environment variable is the REQUIRED source for the connection string.
             string? envConnStr = Environment.GetEnvironmentVariable("NAPAS_DB_CONNECTION_STRING");
             if (!string.IsNullOrEmpty(envConnStr))
             {
                 _databaseConfig.ConnectionString = envConnStr;
-                SwitchLogger.Info($"[CONFIG] Database connection string overridden by NAPAS_DB_CONNECTION_STRING env variable");
+                SwitchLogger.ForContext("CONFIG").Info("Database connection string loaded from NAPAS_DB_CONNECTION_STRING env variable");
+            }
+            else if (string.IsNullOrEmpty(_databaseConfig.ConnectionString))
+            {
+                // No env var and no XML connection string — use a default for local development.
+                // Program.cs will verify the connection before using it.
+                string defaultConn = "Server=localhost;Database=NAPASSwitch;Integrated Security=true;TrustServerCertificate=true;";
+                _databaseConfig.ConnectionString = defaultConn;
+                SwitchLogger.ForContext("CONFIG").Warn("NAPAS_DB_CONNECTION_STRING env variable not set. Using default local connection string.");
+                SwitchLogger.ForContext("CONFIG").Warn("For production, set: NAPAS_DB_CONNECTION_STRING=Server=...;Database=...;...");
+            }
+            else
+            {
+                SwitchLogger.ForContext("CONFIG").Warn("Connection string loaded from XML config file. Use NAPAS_DB_CONNECTION_STRING env variable in production.");
             }
 
             // Load Server Configuration (Listener Ports)
@@ -113,11 +149,11 @@ namespace core.Configuration
             if (File.Exists(serverConfigPath))
             {
                 _serverConfig = LoadXmlConfig<ServerConfiguration>(serverConfigPath);
-                SwitchLogger.Info($"[CONFIG] Loaded server configuration - ISS Ports: [{string.Join(", ", _serverConfig.IssuerPorts)}], ACQ Ports: [{string.Join(", ", _serverConfig.AcquirerPorts)}]");
+                SwitchLogger.ForContext("CONFIG").Info("Loaded server configuration - ISS Ports: [{IssPorts}], ACQ Ports: [{AcqPorts}]", string.Join(", ", _serverConfig.IssuerPorts), string.Join(", ", _serverConfig.AcquirerPorts));
             }
             else
             {
-                SwitchLogger.Info($"[CONFIG] WARNING: ServerConfig.xml not found, using default ports");
+                SwitchLogger.ForContext("CONFIG").Warn("ServerConfig.xml not found, using default ports");
                 _serverConfig = new ServerConfiguration 
                 { 
                     IssuerPorts = new List<int> { 1111, 2222, 3333 },
@@ -125,7 +161,7 @@ namespace core.Configuration
                 };
             }
 
-            SwitchLogger.Info($"[CONFIG] All configurations loaded");
+            SwitchLogger.ForContext("CONFIG").Info("All configurations loaded");
             } // end lock
         }
 

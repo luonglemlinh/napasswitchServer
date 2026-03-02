@@ -19,6 +19,7 @@ namespace core.Helpers
         private static long _authorizationRequests;   // 0200
         private static long _reversalRequests;         // 0400
         private static long _reversalAdvices;          // 0420
+        private static long _voidAdvices;              // 0420 with purchase PC
         private static long _echoRequests;             // 0800
 
         // ---- Connection pool counters ----
@@ -29,6 +30,7 @@ namespace core.Helpers
         private static long _parseErrors;
         private static long _routingErrors;
         private static long _connectionErrors;
+        private static long _droppedLogEntries;
 
         // ---- Throughput tracking ----
         private static long _transactionsInWindow;
@@ -48,6 +50,7 @@ namespace core.Helpers
         public static void IncrementAuthorization() => Interlocked.Increment(ref _authorizationRequests);
         public static void IncrementReversal() => Interlocked.Increment(ref _reversalRequests);
         public static void IncrementReversalAdvice() => Interlocked.Increment(ref _reversalAdvices);
+        public static void IncrementVoidAdvice() => Interlocked.Increment(ref _voidAdvices);
         public static void IncrementEcho() => Interlocked.Increment(ref _echoRequests);
 
         // Pool counters
@@ -58,6 +61,7 @@ namespace core.Helpers
         public static void IncrementParseError() => Interlocked.Increment(ref _parseErrors);
         public static void IncrementRoutingError() => Interlocked.Increment(ref _routingErrors);
         public static void IncrementConnectionError() => Interlocked.Increment(ref _connectionErrors);
+        public static void IncrementDroppedLogEntries() => Interlocked.Increment(ref _droppedLogEntries);
 
         // Response code tracking
         public static void RecordResponseCode(string? rc)
@@ -112,12 +116,14 @@ namespace core.Helpers
                 AuthorizationRequests = Interlocked.Read(ref _authorizationRequests),
                 ReversalRequests = Interlocked.Read(ref _reversalRequests),
                 ReversalAdvices = Interlocked.Read(ref _reversalAdvices),
+                VoidAdvices = Interlocked.Read(ref _voidAdvices),
                 EchoRequests = Interlocked.Read(ref _echoRequests),
                 PoolHits = Interlocked.Read(ref _poolHits),
                 PoolMisses = Interlocked.Read(ref _poolMisses),
                 ParseErrors = Interlocked.Read(ref _parseErrors),
                 RoutingErrors = Interlocked.Read(ref _routingErrors),
                 ConnectionErrors = Interlocked.Read(ref _connectionErrors),
+                DroppedLogEntries = Interlocked.Read(ref _droppedLogEntries),
                 TransactionsPerSecond = GetTransactionsPerSecond(),
                 ResponseCodeDistribution = new Dictionary<string, long>(_responseCodeCounts)
             };
@@ -141,12 +147,14 @@ namespace core.Helpers
         public long AuthorizationRequests { get; set; }
         public long ReversalRequests { get; set; }
         public long ReversalAdvices { get; set; }
+        public long VoidAdvices { get; set; }
         public long EchoRequests { get; set; }
         public long PoolHits { get; set; }
         public long PoolMisses { get; set; }
         public long ParseErrors { get; set; }
         public long RoutingErrors { get; set; }
         public long ConnectionErrors { get; set; }
+        public long DroppedLogEntries { get; set; }
         public double TransactionsPerSecond { get; set; }
         public Dictionary<string, long> ResponseCodeDistribution { get; set; } = new();
     }

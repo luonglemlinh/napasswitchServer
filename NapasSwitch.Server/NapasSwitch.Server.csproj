@@ -15,12 +15,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="System.Data.SqlClient" Version="4.8.6" />
+    <PackageReference Include="Microsoft.Data.SqlClient" Version="5.2.0" />
   </ItemGroup>
 
   <ItemGroup>
-    <None Include="..\Config\NapasValidationConfig.xml">
-      <Link>Config\NapasValidationConfig.xml</Link>
+    <None Include="..\Config\NapasFieldsConfig.xml">
+      <Link>Config\NapasFieldsConfig.xml</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
     </None>
   </ItemGroup>

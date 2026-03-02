@@ -1,6 +1,9 @@
     using System;
 using System.IO;
 using System.Linq;
+using System.Threading;
+using System.Threading.Channels;
+using System.Threading.Tasks;
 using core.Models;
 using core.Security;
 
@@ -8,6 +11,7 @@ namespace core.Helpers
 {
     /// <summary>
     /// Utility class for logging detailed ISO-8583 message contents to a file.
+    /// Uses Channel&lt;T&gt; for non-blocking, high-throughput logging.
     /// This helps keep the console output clean while preserving full message details for debugging.
     /// </summary>
     public static class MessageLogger
@@ -16,11 +20,66 @@ namespace core.Helpers
         private static readonly string LogFilePath = Path.Combine(LogDir, "message_log.txt");
         private static readonly string NetworkLogFilePath = Path.Combine(LogDir, "network_message.txt");
         private static readonly string ConnectionLogFilePath = Path.Combine(LogDir, "h2h_connections.txt");
-        private static readonly object _lock = new object();
+
+        // Channel for non-blocking log writes - unbounded to prevent blocking callers
+        private static readonly Channel<LogEntry> _logChannel = Channel.CreateUnbounded<LogEntry>(
+            new UnboundedChannelOptions { SingleReader = true, SingleWriter = false });
+
+        private static readonly Task _writerTask;
+        private static readonly CancellationTokenSource _cts = new();
 
         private static DateTime _lastRotationCheck = DateTime.MinValue;
         private static bool _logDirExists = false;
         private static readonly TimeSpan RotationCheckInterval = TimeSpan.FromSeconds(5);
+
+        // Log entry types
+        private abstract record LogEntry;
+        private sealed record RawLogEntry(string SessionId, string Hex, string Ascii) : LogEntry;
+        private sealed record MessageLogEntry(string SessionId, string Direction, IsoMessage Message) : LogEntry;
+        private sealed record ConnectionLogEntry(string Source, string Message) : LogEntry;
+
+        static MessageLogger()
+        {
+            // Start the background writer task
+            _writerTask = Task.Run(ProcessLogEntriesAsync);
+        }
+
+        private static async Task ProcessLogEntriesAsync()
+        {
+            var reader = _logChannel.Reader;
+
+            try
+            {
+                await foreach (var entry in reader.ReadAllAsync(_cts.Token))
+                {
+                    try
+                    {
+                        EnsureInitialized();
+
+                        switch (entry)
+                        {
+                            case RawLogEntry raw:
+                                WriteRawLog(raw);
+                                break;
+                            case MessageLogEntry msg:
+                                WriteMessageLog(msg);
+                                break;
+                            case ConnectionLogEntry conn:
+                                WriteConnectionLog(conn);
+                                break;
+                        }
+                    }
+                    catch
+                    {
+                        // Ignore individual log write failures to prevent crash
+                    }
+                }
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected during shutdown
+            }
+        }
 
         private static void EnsureInitialized()
         {
@@ -49,19 +108,15 @@ namespace core.Helpers
 
         public static void LogConnectionEvent(string source, string message)
         {
-            try
-            {
-                lock (_lock)
-                {
-                    EnsureInitialized();
-                    using (var writer = new StreamWriter(ConnectionLogFilePath, append: true))
-                    {
-                        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
-                        writer.WriteLine($"{timestamp} [{source}] {message}");
-                    }
-                }
-            }
-            catch { /* Ignore */ }
+            // Non-blocking enqueue
+            _logChannel.Writer.TryWrite(new ConnectionLogEntry(source, message));
+        }
+
+        private static void WriteConnectionLog(ConnectionLogEntry entry)
+        {
+            using var writer = new StreamWriter(ConnectionLogFilePath, append: true);
+            string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
+            writer.WriteLine($"{timestamp} [{entry.Source}] {entry.Message}");
         }
 
         private static void RotateFile(string path)
@@ -85,74 +140,63 @@ namespace core.Helpers
 
         public static void LogRaw(string sessionId, string hex, string ascii)
         {
-            try
-            {
-                lock (_lock)
-                {
-                    EnsureInitialized();
-                    using (var writer = new StreamWriter(LogFilePath, append: true))
-                    {
-                        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
-                        writer.WriteLine($"{timestamp} [{sessionId}] Raw HEX: {hex}");
-                        writer.WriteLine($"{timestamp} [{sessionId}] Raw ASCII: {ascii}");
-                    }
-                }
-            }
-            catch { }
+            // Non-blocking enqueue
+            _logChannel.Writer.TryWrite(new RawLogEntry(sessionId, hex, ascii));
+        }
+
+        private static void WriteRawLog(RawLogEntry entry)
+        {
+            using var writer = new StreamWriter(LogFilePath, append: true);
+            string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
+            writer.WriteLine($"{timestamp} [{entry.SessionId}] Raw HEX: {entry.Hex}");
+            writer.WriteLine($"{timestamp} [{entry.SessionId}] Raw ASCII: {entry.Ascii}");
         }
 
         public static void LogMessage(string sessionId, string direction, IsoMessage message)
         {
-            try
+            // Non-blocking enqueue
+            _logChannel.Writer.TryWrite(new MessageLogEntry(sessionId, direction, message));
+        }
+
+        private static void WriteMessageLog(MessageLogEntry entry)
+        {
+            var message = entry.Message;
+            string targetPath = message.MessageType.StartsWith("08") ? NetworkLogFilePath : LogFilePath;
+
+            using var writer = new StreamWriter(targetPath, append: true);
+            string trn = message.GetTRN() ?? "N/A";
+            string mti = message.MessageType;
+            string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
+
+            writer.WriteLine($"{timestamp} <{trn}> [------------] {entry.Direction}:");
+            writer.WriteLine($"\tType: {mti}");
+
+            if (!string.IsNullOrEmpty(message.Header))
             {
-                lock (_lock)
-                {
-                    EnsureInitialized();
-                    
-                    string targetPath = message.MessageType.StartsWith("08") ? NetworkLogFilePath : LogFilePath;
-
-                    using (var writer = new StreamWriter(targetPath, append: true))
-                    {
-                        string trn = message.GetTRN() ?? "N/A";
-                        string mti = message.MessageType;
-                        string timestamp = DateTime.UtcNow.ToString("yyyy-MM-dd HH:mm:ss.fff");
-
-                        writer.WriteLine($"{timestamp} <{trn}> [------------] {direction}:");
-                        writer.WriteLine($"\tType: {mti}");
-
-                        if (!string.IsNullOrEmpty(message.Header))
-                        {
-                            writer.WriteLine($"\t000:{message.Header}");
-                        }
-
-                        if (!string.IsNullOrEmpty(message.PrimaryBitmap))
-                        {
-                            string bitmap = message.PrimaryBitmap;
-                            if (!string.IsNullOrEmpty(message.SecondaryBitmap)) bitmap += message.SecondaryBitmap;
-                            writer.WriteLine($"\t001:{bitmap}");
-                        }
-
-                        foreach (var field in message.Fields.OrderBy(f => f.Key))
-                        {
-                            if (field.Key == 0 || field.Key == 1) continue; // Already handled
-
-                            int fNum = field.Key;
-                            string value = field.Value;
-                            
-                            // Mask sensitive fields for PCI-DSS compliance
-                            string maskedValue = MaskSensitiveField(fNum, value);
-                            
-                            writer.WriteLine($"\t{fNum:D3}:{maskedValue}");
-
-                            // Subfield logging (use masked value for sensitive fields)
-                            LogSubfields(writer, fNum, maskedValue);
-                        }
-                    }
-                }
+                writer.WriteLine($"\t000:{message.Header}");
             }
-            catch (Exception ex)
+
+            if (!string.IsNullOrEmpty(message.PrimaryBitmap))
             {
-                SwitchLogger.Info($"[ERROR] Failed to log message to file: {ex.Message}");
+                string bitmap = message.PrimaryBitmap;
+                if (!string.IsNullOrEmpty(message.SecondaryBitmap)) bitmap += message.SecondaryBitmap;
+                writer.WriteLine($"\t001:{bitmap}");
+            }
+
+            foreach (var field in message.Fields.OrderBy(f => f.Key))
+            {
+                if (field.Key == 0 || field.Key == 1) continue; // Already handled
+
+                int fNum = field.Key;
+                string value = field.Value;
+
+                // Mask sensitive fields for PCI-DSS compliance
+                string maskedValue = MaskSensitiveField(fNum, value);
+
+                writer.WriteLine($"\t{fNum:D3}:{maskedValue}");
+
+                // Subfield logging (use masked value for sensitive fields)
+                LogSubfields(writer, fNum, maskedValue);
             }
         }
 
@@ -231,6 +275,16 @@ namespace core.Helpers
                 default:
                     return value;
             }
+        }
+
+        /// <summary>
+        /// Flush pending log entries and shutdown the background writer.
+        /// Call this during application shutdown.
+        /// </summary>
+        public static async Task ShutdownAsync()
+        {
+            _logChannel.Writer.Complete();
+            await _writerTask;
         }
     }
 }

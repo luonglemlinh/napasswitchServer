@@ -23,10 +23,16 @@ namespace data.Models
         public DateTime TransactionTime { get; set; }
         public DateTime LoggedAt { get; set; } = DateTime.UtcNow;
         public int ProcessingTimeMs { get; set; }
-        
-        
-        /// Direction: INBOUND (from ACQ), OUTBOUND (to ISS), RESPONSE (from ISS)
-        
+
+
+        /// Direction: INBOUND (from ACQ), OUTBOUND (to ISS), COMPLETE, TIMEOUT, ERROR, ADVICE, SETTLED
+
         public string Direction { get; set; } = string.Empty;
+
+        /// Transaction type derived from MTI + Processing Code (e.g., PURCHASE, BALANCE_INQUIRY, VOID, REVERSAL)
+        public string? TransactionType { get; set; }
+
+        /// Settlement date (populated when settled from UnsettledTransactions)
+        public DateTime? SettlementDate { get; set; }
     }
 }
