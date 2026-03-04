@@ -25,15 +25,16 @@ namespace data
         private bool _disposed;
 
         private abstract record LogEntry;
-        private sealed record TransactionLogEntry(IsoMessage Request, IsoMessage Response, string SessionId, int ProcessingTimeMs, string Direction) : LogEntry;
-        private sealed record RequestLogEntry(IsoMessage Request, string SessionId, string Direction) : LogEntry;
+        private sealed record TransactionLogEntry(IsoMessage Request, IsoMessage Response, string TransactionId, string SessionId) : LogEntry;
+        private sealed record RequestLogEntry(IsoMessage Request, byte[] MessageBytes, string TransactionId, string SessionId, int ExpirationMinutes) : LogEntry;
+        private sealed record StatusUpdateEntry(string TransactionId, string Status, string? ErrorReason = null, string? ResponseCode = null) : LogEntry;
 
         public TransactionLogger(string connectionString, bool enableLogging = true, SecureDataHandler? secureDataHandler = null)
         {
             _connectionString = connectionString;
             _enableLogging = enableLogging;
             _secureDataHandler = secureDataHandler;
-            _logChannel = Channel.CreateBounded<LogEntry>(new BoundedChannelOptions(1000)
+            _logChannel = Channel.CreateBounded<LogEntry>(new BoundedChannelOptions(2000)
             {
                 FullMode = BoundedChannelFullMode.DropOldest,
                 SingleReader = true,
@@ -57,10 +58,13 @@ namespace data
                         switch (entry)
                         {
                             case TransactionLogEntry txn:
-                                await LogTransactionToDbAsync(connection, txn.Request, txn.Response, txn.SessionId, txn.ProcessingTimeMs, txn.Direction);
+                                await LogTransactionToDbAsync(connection, txn.Request, txn.Response, txn.TransactionId, txn.SessionId);
                                 break;
                             case RequestLogEntry req:
-                                await LogRequestToDbAsync(connection, req.Request, req.SessionId, req.Direction);
+                                await LogRequestToDbAsync(connection, req.Request, req.MessageBytes, req.TransactionId, req.SessionId, req.ExpirationMinutes);
+                                break;
+                            case StatusUpdateEntry status:
+                                await UpdateStatusInDbAsync(connection, status.TransactionId, status.Status, status.ErrorReason, status.ResponseCode);
                                 break;
                         }
                     }
@@ -101,17 +105,17 @@ namespace data
             switch (entry)
             {
                 case TransactionLogEntry txn:
-                    core.Helpers.MessageLogger.LogMessage(txn.SessionId, txn.Direction, txn.Response ?? txn.Request);
+                    core.Helpers.MessageLogger.LogMessage(txn.SessionId, "COMPLETE", txn.Response ?? txn.Request);
                     break;
                 case RequestLogEntry req:
-                    core.Helpers.MessageLogger.LogMessage(req.SessionId, req.Direction, req.Request);
+                    core.Helpers.MessageLogger.LogMessage(req.SessionId, "INBOUND", req.Request);
+                    break;
+                case StatusUpdateEntry s:
+                    SwitchLogger.ForContext("DB-LOG").Warn("Status update failed for {TransactionId} -> {Status}. Fallback: Check process logs.", s.TransactionId, s.Status);
                     break;
             }
         }
 
-        /// <summary>
-        /// Encrypt PAN using the injected SecureDataHandler, or mask if unavailable.
-        /// </summary>
         private string? EncryptPanForStorage(string? pan)
         {
             if (string.IsNullOrEmpty(pan)) return null;
@@ -119,43 +123,54 @@ namespace data
             return SecureDataHandler.MaskPAN(pan);
         }
 
-        public Task LogTransactionAsync(
-            IsoMessage request,
-            IsoMessage response,
-            string sessionId,
-            int processingTimeMs,
-            string direction = "COMPLETE")
+        public Task LogTransactionAsync(IsoMessage request, IsoMessage response, string transactionId, string sessionId)
         {
             if (!_enableLogging) return Task.CompletedTask;
-            if (!_logChannel.Writer.TryWrite(new TransactionLogEntry(request, response, sessionId, processingTimeMs, direction)))
-            {
-                ServerMetrics.IncrementDroppedLogEntries();
-                SwitchLogger.ForContext("DB-LOG").Error("Channel full — falling back to file log. SessionId={SessionId}, Direction={Direction}", sessionId, direction);
-                core.Helpers.MessageLogger.LogMessage(sessionId, $"DB-OVERFLOW-{direction}", response ?? request);
-            }
+            _logChannel.Writer.TryWrite(new TransactionLogEntry(request, response, transactionId, sessionId));
             return Task.CompletedTask;
         }
 
-        private async Task LogTransactionToDbAsync(
-            SqlConnection connection,
-            IsoMessage request,
-            IsoMessage response,
-            string sessionId,
-            int processingTimeMs,
-            string direction)
+        private async Task LogTransactionToDbAsync(SqlConnection connection, IsoMessage request, IsoMessage response, string transactionId, string sessionId)
         {
+            // Transition from PENDING to MATCHED (Consolidation)
             string query = @"
-                            INSERT INTO TransactionLog 
-                            (SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
-                             AcquirerID, IssuerID, ResponseCode, TerminalID, MerchantID,
-                             TransactionTime, LoggedAt, ProcessingTimeMs, Direction, TransactionType)
-                            VALUES 
-                            (@SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
-                             @AcquirerID, @IssuerID, @ResponseCode, @TerminalID, @MerchantID,
-                             @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction, @TransactionType)";
+                UPDATE TransactionLog SET
+                    ResponseCode = @ResponseCode,
+                    AuthorizationCode = @AuthorizationCode,
+                    RRN = COALESCE(RRN, @RRN),
+                    Status = 'MATCHED',
+                    CompletedTime = GETUTCDATE()
+                WHERE TransactionId = @TransactionId";
 
-            using (var command = new SqlCommand(query, connection))
+            // If the record doesn't exist (e.g. echo or non-financial), we might need an UPSERT logic 
+            // but for financial transactions it's always an UPDATE.
+            // Let's use a smarter UPSERT just in case.
+            string upsertQuery = @"
+                IF EXISTS (SELECT 1 FROM TransactionLog WHERE TransactionId = @TransactionId)
+                BEGIN
+                    UPDATE TransactionLog SET
+                        ResponseCode = @ResponseCode,
+                        AuthorizationCode = @AuthorizationCode,
+                        RRN = COALESCE(RRN, @RRN),
+                        Status = 'MATCHED'
+                    WHERE TransactionId = @TransactionId;
+                END
+                ELSE
+                BEGIN
+                    INSERT INTO TransactionLog (
+                        TransactionId, SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
+                        AcquirerID, IssuerID, ResponseCode, TerminalID, MerchantID,
+                        TransactionTime, TransactionType, RRN, TRN, AuthorizationCode, Status
+                    ) VALUES (
+                        @TransactionId, @SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
+                        @AcquirerID, @IssuerID, @ResponseCode, @TerminalID, @MerchantID,
+                        GETUTCDATE(), @TransactionType, @RRN, @TRN, @AuthorizationCode, 'MATCHED'
+                    );
+                END";
+
+            using (var command = new SqlCommand(upsertQuery, connection))
             {
+                command.Parameters.AddWithValue("@TransactionId", transactionId);
                 command.Parameters.AddWithValue("@SessionId", sessionId);
                 command.Parameters.AddWithValue("@MessageType", request.MessageType);
                 command.Parameters.AddWithValue("@PAN", (object?)EncryptPanForStorage(request.GetPAN()) ?? DBNull.Value);
@@ -167,43 +182,39 @@ namespace data
                 command.Parameters.AddWithValue("@ResponseCode", (object?)response.GetResponseCode() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@TransactionTime", DateTime.UtcNow);
-                command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
-                command.Parameters.AddWithValue("@ProcessingTimeMs", processingTimeMs);
-                command.Parameters.AddWithValue("@Direction", direction);
                 command.Parameters.AddWithValue("@TransactionType",
                     TransactionTypeHelper.GetTransactionType(request.MessageType, request.GetProcessingCode()));
+                command.Parameters.AddWithValue("@RRN", (object?)request.GetField(37) ?? (object?)response.GetField(37) ?? DBNull.Value);
+                command.Parameters.AddWithValue("@TRN", (object?)request.GetTRN() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@AuthorizationCode", (object?)response.GetField(38) ?? DBNull.Value);
 
                 await command.ExecuteNonQueryAsync();
             }
         }
 
-        public Task LogRequestAsync(IsoMessage request, string sessionId, string direction = "INBOUND")
+        public Task LogRequestAsync(IsoMessage request, byte[] messageBytes, string transactionId, string sessionId, int expirationMinutes = 5)
         {
             if (!_enableLogging) return Task.CompletedTask;
-            if (!_logChannel.Writer.TryWrite(new RequestLogEntry(request, sessionId, direction)))
-            {
-                ServerMetrics.IncrementDroppedLogEntries();
-                SwitchLogger.ForContext("DB-LOG").Error("Channel full — falling back to file log. SessionId={SessionId}, Direction={Direction}", sessionId, direction);
-                core.Helpers.MessageLogger.LogMessage(sessionId, $"DB-OVERFLOW-{direction}", request);
-            }
+            _logChannel.Writer.TryWrite(new RequestLogEntry(request, messageBytes, transactionId, sessionId, expirationMinutes));
             return Task.CompletedTask;
         }
 
-        private async Task LogRequestToDbAsync(SqlConnection connection, IsoMessage request, string sessionId, string direction)
+        private async Task LogRequestToDbAsync(SqlConnection connection, IsoMessage request, byte[] messageBytes, string transactionId, string sessionId, int expirationMinutes)
         {
             string query = @"
-                            INSERT INTO TransactionLog 
-                            (SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
-                             AcquirerID, IssuerID, TerminalID, MerchantID,
-                             TransactionTime, LoggedAt, ProcessingTimeMs, Direction, TransactionType)
-                            VALUES 
-                            (@SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
-                             @AcquirerID, @IssuerID, @TerminalID, @MerchantID,
-                             @TransactionTime, @LoggedAt, @ProcessingTimeMs, @Direction, @TransactionType)";
+                INSERT INTO TransactionLog (
+                    TransactionId, SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
+                    AcquirerID, IssuerID, TerminalID, MerchantID,
+                    TransactionTime, TransactionType, RRN, TRN, Status, ExpiresAt, RequestMessageBytes
+                ) VALUES (
+                    @TransactionId, @SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
+                    @AcquirerID, @IssuerID, @TerminalID, @MerchantID,
+                    GETUTCDATE(), @TransactionType, @RRN, @TRN, 'PENDING', 
+                    DATEADD(MINUTE, @Expiry, GETUTCDATE()), @MessageBytes)";
 
             using (var command = new SqlCommand(query, connection))
             {
+                command.Parameters.AddWithValue("@TransactionId", transactionId);
                 command.Parameters.AddWithValue("@SessionId", sessionId);
                 command.Parameters.AddWithValue("@MessageType", request.MessageType);
                 command.Parameters.AddWithValue("@PAN", (object?)EncryptPanForStorage(request.GetPAN()) ?? DBNull.Value);
@@ -214,15 +225,82 @@ namespace data
                 command.Parameters.AddWithValue("@IssuerID", (object?)request.GetIssuerID() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@TransactionTime", DateTime.UtcNow);
-                command.Parameters.AddWithValue("@LoggedAt", DateTime.UtcNow);
-                command.Parameters.AddWithValue("@ProcessingTimeMs", 0);
-                command.Parameters.AddWithValue("@Direction", direction);
                 command.Parameters.AddWithValue("@TransactionType",
                     TransactionTypeHelper.GetTransactionType(request.MessageType, request.GetProcessingCode()));
+                command.Parameters.AddWithValue("@RRN", (object?)request.GetField(37) ?? DBNull.Value);
+                command.Parameters.AddWithValue("@TRN", (object?)request.GetTRN() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@Expiry", expirationMinutes);
+                command.Parameters.AddWithValue("@MessageBytes", messageBytes);
 
                 await command.ExecuteNonQueryAsync();
             }
+        }
+
+        public Task UpdateStatusAsync(string transactionId, string status, string? errorReason = null, string? responseCode = null)
+        {
+            if (!_enableLogging) return Task.CompletedTask;
+            _logChannel.Writer.TryWrite(new StatusUpdateEntry(transactionId, status, errorReason, responseCode));
+            return Task.CompletedTask;
+        }
+
+        private async Task UpdateStatusInDbAsync(SqlConnection connection, string transactionId, string status, string? errorReason, string? responseCode)
+        {
+            string query = @"
+                UPDATE TransactionLog SET 
+                    Status = @Status, 
+                    ErrorReason = COALESCE(@ErrorReason, ErrorReason),
+                    ResponseCode = COALESCE(@ResponseCode, ResponseCode)
+                WHERE TransactionId = @TransactionId";
+
+            using (var command = new SqlCommand(query, connection))
+            {
+                command.Parameters.AddWithValue("@TransactionId", transactionId);
+                command.Parameters.AddWithValue("@Status", status);
+                command.Parameters.AddWithValue("@ErrorReason", (object?)errorReason ?? DBNull.Value);
+                command.Parameters.AddWithValue("@ResponseCode", (object?)responseCode ?? DBNull.Value);
+                await command.ExecuteNonQueryAsync();
+            }
+        }
+
+        public async Task<bool> IsDuplicateAsync(string stan, string? acquirerId, string? transactionDate)
+        {
+            using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            using var command = new SqlCommand(@"
+                SELECT COUNT(*) FROM TransactionLog 
+                WHERE STAN = @STAN 
+                  AND AcquirerID = @AcquirerID 
+                  AND Status IN ('PENDING', 'MATCHED')", connection);
+
+            command.Parameters.AddWithValue("@STAN", stan);
+            command.Parameters.AddWithValue("@AcquirerID", acquirerId ?? (object)DBNull.Value);
+            // In a real system we'd also check the date field if present in the message or use TransactionTime range
+
+            var result = await command.ExecuteScalarAsync();
+            return result != null && Convert.ToInt32(result) > 0;
+        }
+
+        public async Task<IsoMessage?> GetOriginalRequestAsync(string? trn, string? stan, string? acquirerId)
+        {
+            using var connection = new SqlConnection(_connectionString);
+            await connection.OpenAsync();
+
+            string whereClause = !string.IsNullOrEmpty(trn) ? "TRN = @Param" : "STAN = @Param AND AcquirerID = @Acq";
+            
+            using var command = new SqlCommand($@"
+                SELECT RequestMessageBytes FROM TransactionLog 
+                WHERE {whereClause} AND Status = 'MATCHED'
+                ORDER BY Id DESC", connection);
+
+            command.Parameters.AddWithValue("@Param", trn ?? stan);
+            if (string.IsNullOrEmpty(trn)) command.Parameters.AddWithValue("@Acq", acquirerId ?? (object)DBNull.Value);
+
+            var bytes = await command.ExecuteScalarAsync() as byte[];
+            if (bytes == null) return null;
+
+            var parser = new core.ISO8583.IsoParser();
+            return parser.Parse(bytes);
         }
 
         private decimal ParseAmount(string? amountStr)
@@ -245,11 +323,10 @@ namespace data
                                         COUNT(*) as TotalCount,
                                         SUM(CASE WHEN ResponseCode = '00' THEN 1 ELSE 0 END) as ApprovedCount,
                                         SUM(CASE WHEN ResponseCode != '00' THEN 1 ELSE 0 END) as DeclinedCount,
-                                        AVG(ProcessingTimeMs) as AvgProcessingTime,
+                                        0 as AvgProcessingTime,
                                         SUM(Amount) as TotalAmount
                                     FROM TransactionLog
-                                    WHERE TransactionTime BETWEEN @From AND @To
-                                    AND Direction = 'COMPLETE'";
+                                    WHERE TransactionTime BETWEEN @From AND @To";
 
                     using (var command = new SqlCommand(query, connection))
                     {

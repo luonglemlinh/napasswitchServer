@@ -1,24 +1,27 @@
--- NAPAS Switch - Full Database Schema
--- Combines original schema and Phase 1/Phase 2 migrations
--- Includes schema modernization improvements:
+    -- NAPAS Switch - Full Database Schema (Idempotent)
+-- Paste once in SSMS and run. Works on fresh server or existing database.
+-- Includes all phases through Phase 4:
 --   - Composite covering indexes for key query patterns
---   - CHECK constraints for data integrity (Direction, Amount, MessageType, ResponseCode)
+--   - CHECK constraints for data integrity (Amount, MessageType, ResponseCode)
 --   - ErrorReason column separation from ResponseCode in UnsettledTransactions
 --   - Computed TransactionDate column for future date-based partitioning
---   - UpdatedAt auto-trigger for UnsettledTransactions
---   - Settlement stored procedure (UnsettledTransactions ? TransactionLog at end-of-day)
+--   - Settlement stored procedure (UnsettledTransactions -> TransactionLog at end-of-day)
 --   - Archival stored procedures for long-term scalability
 --   - Fixed AcquirerID/IssuerID column size mismatch (standardized to VARCHAR(11))
 --   - TransactionType column for PURCHASE, BALANCE_INQUIRY, VOID, REVERSAL tracking
 --   - SettlementDate column for settlement-day scoping
 --   - OriginalTransactionId for void/reversal linking
---   - Renamed PendingTransactions ? UnsettledTransactions (settlement-day architecture)
--- Run this script in SQL Server Management Studio (SSMS)
+--   - Phase 3: MessageCycle table for 1-row-per-leg cycle tracking (ACQ/ISS/RawMessage)
+--   - Phase 3: Removed cycle timestamps from TransactionLog and UnsettledTransactions
+--   - Phase 3: Differentiated Void/Reversal via CancellationType in UnsettledTransactions
+--   - Phase 4: TransactionLog normalized: RRN, TRN, AuthorizationCode, CurrencyCode, POSEntryMode
+--   - Phase 4: UnsettledTransactions: RequestIssuerID for issuer tracking
+--   - Phase 4: MessageCycle: ResponseCode for quick response filtering
+--   - Phase 4: CHIP EMV support (DE#55 validation, POS entry mode tracking)
 
-USE [master];
-GO
-
--- Create database if it doesn't exist
+-- ============================================================
+-- 0. Create database if it doesn't exist, then switch to it
+-- ============================================================
 IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = N'NAPASSwitch')
 BEGIN
     CREATE DATABASE [NAPASSwitch];
@@ -32,8 +35,82 @@ GO
 PRINT '=== NAPAS Switch Database Schema Initialization ==='
 PRINT ''
 
+-- Safety net: drop orphaned trigger from prior partial migrations
+-- (trigger can survive even after UpdatedAt column was dropped, causing runtime errors)
+IF EXISTS (SELECT * FROM sys.triggers WHERE name = 'TR_UnsettledTransactions_UpdatedAt')
+BEGIN
+    DROP TRIGGER TR_UnsettledTransactions_UpdatedAt;
+    PRINT '  + Dropped orphaned trigger TR_UnsettledTransactions_UpdatedAt';
+END
+
 -- ============================================================
--- 1. Create the TransactionLog table
+-- 1. Create the MessageCycle table
+--    Tracks each leg of the message cycle (FORWARDED, RECEIVED, OUTBOUND)
+--    ACQ  = F32 Acquiring Institution ID
+--    ISS  = F33 Forwarding/Issuing Institution ID
+-- ============================================================
+IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='MessageCycle' and xtype='U')
+BEGIN
+    CREATE TABLE MessageCycle (
+        Id BIGINT PRIMARY KEY IDENTITY(1,1),
+        TransactionId VARCHAR(128) NOT NULL,
+        SessionId VARCHAR(20) NOT NULL,
+        ACQ VARCHAR(11) NULL,
+        ISS VARCHAR(50) NULL,
+        Direction VARCHAR(20) NOT NULL
+            CONSTRAINT CK_MessageCycle_Direction CHECK (Direction IN ('FORWARDED','RECEIVED','OUTBOUND')),
+        MessageType VARCHAR(4) NULL,
+        ProcessingCode VARCHAR(6) NULL,
+        Amount DECIMAL(18,2) NULL,
+        STAN VARCHAR(6) NULL,
+        RRN VARCHAR(12) NULL,
+        ResponseCode VARCHAR(3) NULL,
+        LogTime DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        RawMessage VARCHAR(MAX) NOT NULL,
+
+        INDEX IX_MessageCycle_TransactionId (TransactionId),
+        INDEX IX_MessageCycle_SessionId (SessionId)
+    );
+    PRINT '  MessageCycle table created successfully';
+END
+ELSE
+BEGIN
+    PRINT '- MessageCycle table already exists, checking for column renames...'
+
+    -- Phase 3 migration: Sender -> ACQ
+    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'Sender')
+       AND NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'ACQ')
+    BEGIN
+        EXEC sp_rename 'MessageCycle.Sender', 'ACQ', 'COLUMN';
+        PRINT '  + Renamed column Sender -> ACQ';
+    END
+
+    -- Phase 3 migration: Name -> ISS
+    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'Name')
+       AND NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'ISS')
+    BEGIN
+        EXEC sp_rename 'MessageCycle.Name', 'ISS', 'COLUMN';
+        PRINT '  + Renamed column Name -> ISS';
+    END
+
+    -- Phase 3 migration: MessageLog -> RawMessage
+    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'MessageLog')
+       AND NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'RawMessage')
+    BEGIN
+        EXEC sp_rename 'MessageCycle.MessageLog', 'RawMessage', 'COLUMN';
+        PRINT '  + Renamed column MessageLog -> RawMessage';
+    END
+
+    -- Phase 4 migration: Add ResponseCode column
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'ResponseCode')
+    BEGIN
+        ALTER TABLE MessageCycle ADD ResponseCode VARCHAR(3) NULL;
+        PRINT '  + Added ResponseCode column to MessageCycle';
+    END
+END
+
+-- ============================================================
+-- 2. Create the TransactionLog table
 --    Serves as the historical audit log for all messages AND
 --    the archive for settled transactions from UnsettledTransactions.
 -- ============================================================
@@ -56,38 +133,55 @@ BEGIN
         TerminalID VARCHAR(16) NULL,
         MerchantID VARCHAR(15) NULL,
         TransactionTime DATETIME2 NOT NULL,
-        LoggedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
-        ProcessingTimeMs INT NOT NULL DEFAULT 0,
-        Direction VARCHAR(10) NOT NULL
-            CONSTRAINT CK_TransactionLog_Direction CHECK (Direction IN ('INBOUND','OUTBOUND','COMPLETE','TIMEOUT','ERROR','ADVICE','SETTLED')),
-        
+
         -- Transaction classification (derived from MTI + Processing Code)
         TransactionType VARCHAR(20) NULL,
 
         -- Settlement date (populated when settled from UnsettledTransactions, NULL for real-time audit entries)
         SettlementDate DATE NULL,
-        
+
+        -- Phase 4: Additional normalized fields for reconciliation and reporting
+        RRN VARCHAR(12) NULL,
+        TRN VARCHAR(50) NULL,
+        AuthorizationCode VARCHAR(6) NULL,
+        CurrencyCode VARCHAR(3) NULL,
+        POSEntryMode VARCHAR(3) NULL,
+
+        -- Reversal/Consolidation Fields
+        OriginalTransactionId VARCHAR(128) NULL,
+        ErrorReason VARCHAR(255) NULL,
+        RequestMessageBytes VARBINARY(MAX) NULL,
+
         -- Computed column for future date-based partitioning
         TransactionDate AS CAST(TransactionTime AS DATE) PERSISTED,
-        
+
+        -- Consolidated Tracking Fields
+        TransactionId VARCHAR(128) NOT NULL UNIQUE,
+        Status VARCHAR(10) NOT NULL DEFAULT 'PENDING'
+            CONSTRAINT CK_TransactionLog_Status 
+            CHECK (Status IN ('PENDING','MATCHED','MISMATCH','EXPIRED','VOIDED','REVERSED','ECHO')),
+        ExpiresAt DATETIME2 NULL,
+
         -- Single-column indexes for ad-hoc queries
         INDEX IX_SessionId (SessionId),
         INDEX IX_TransactionTime (TransactionTime),
         INDEX IX_AcquirerID (AcquirerID),
         INDEX IX_IssuerID (IssuerID),
-        INDEX IX_STAN (STAN)
+        INDEX IX_STAN (STAN),
+        INDEX IX_RRN (RRN),
+        INDEX IX_TRN (TRN),
+        INDEX IX_TransactionLog_Status_Expires (Status, ExpiresAt),
+        INDEX IX_TransactionLog_Original (OriginalTransactionId)
     );
 
     -- Composite covering index for GetStatsAsync aggregation query
-    -- Covers: WHERE TransactionTime BETWEEN @From AND @To AND Direction = 'COMPLETE'
-    -- Includes all columns needed by SELECT to avoid key lookups
     CREATE NONCLUSTERED INDEX IX_TransactionLog_Stats 
-        ON TransactionLog(TransactionTime, Direction)
-        INCLUDE (ResponseCode, Amount, ProcessingTimeMs);
+        ON TransactionLog(TransactionTime)
+        INCLUDE (ResponseCode, Amount);
 
-    -- Composite index for response code filtering by direction
-    CREATE NONCLUSTERED INDEX IX_TransactionLog_ResponseCode_Direction 
-        ON TransactionLog(ResponseCode, Direction)
+    -- Composite index for response code filtering
+    CREATE NONCLUSTERED INDEX IX_TransactionLog_ResponseCode
+        ON TransactionLog(ResponseCode)
         INCLUDE (Amount, TransactionTime);
 
     -- Index for settlement queries by date and type
@@ -148,43 +242,76 @@ BEGIN
         PRINT '  + Widened PAN column to VARCHAR(128) for encrypted storage';
     END
 
+    -- Phase 3 Migration: Drop old indexes that depend on Direction BEFORE recreating them or dropping the column
+    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'Direction')
+    BEGIN
+        IF EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_TransactionLog_Stats' AND object_id = OBJECT_ID('TransactionLog'))
+        BEGIN
+            DROP INDEX IX_TransactionLog_Stats ON TransactionLog;
+            PRINT '  + Dropped old index IX_TransactionLog_Stats';
+        END
+        IF EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_TransactionLog_ResponseCode_Direction' AND object_id = OBJECT_ID('TransactionLog'))
+        BEGIN
+            DROP INDEX IX_TransactionLog_ResponseCode_Direction ON TransactionLog;
+            PRINT '  + Dropped old index IX_TransactionLog_ResponseCode_Direction';
+        END
+    END
+
     -- Sync composite covering index for stats query
     IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_TransactionLog_Stats' AND object_id = OBJECT_ID('TransactionLog'))
     BEGIN
         CREATE NONCLUSTERED INDEX IX_TransactionLog_Stats 
-            ON TransactionLog(TransactionTime, Direction)
-            INCLUDE (ResponseCode, Amount, ProcessingTimeMs);
+            ON TransactionLog(TransactionTime)
+            INCLUDE (ResponseCode, Amount);
         PRINT '  + Created composite covering index IX_TransactionLog_Stats';
     END
 
     -- Sync composite index for response code filtering
-    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_TransactionLog_ResponseCode_Direction' AND object_id = OBJECT_ID('TransactionLog'))
+    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_TransactionLog_ResponseCode' AND object_id = OBJECT_ID('TransactionLog'))
     BEGIN
-        CREATE NONCLUSTERED INDEX IX_TransactionLog_ResponseCode_Direction 
-            ON TransactionLog(ResponseCode, Direction)
+        CREATE NONCLUSTERED INDEX IX_TransactionLog_ResponseCode 
+            ON TransactionLog(ResponseCode)
             INCLUDE (Amount, TransactionTime);
-        PRINT '  + Created composite index IX_TransactionLog_ResponseCode_Direction';
+        PRINT '  + Created composite index IX_TransactionLog_ResponseCode';
     END
 
-    -- Sync CHECK constraints (only add if not already present)
-    IF NOT EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_TransactionLog_Direction')
+    -- Phase 3 Migration: Drop obsolete cycle fields (Direction, ProcessingTimeMs, LoggedAt)
+    -- Must drop default constraints first since system-generated names vary per database.
+    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'Direction')
     BEGIN
-        ALTER TABLE TransactionLog ADD CONSTRAINT CK_TransactionLog_Direction 
-            CHECK (Direction IN ('INBOUND','OUTBOUND','COMPLETE','TIMEOUT','ERROR','ADVICE','SETTLED'));
-        PRINT '  + Added CHECK constraint CK_TransactionLog_Direction';
-    END
-    ELSE
-    BEGIN
-        -- Update existing constraint to include ADVICE and SETTLED
-        DECLARE @ConstraintDef NVARCHAR(MAX);
-        SELECT @ConstraintDef = definition FROM sys.check_constraints WHERE name = 'CK_TransactionLog_Direction';
-        IF @ConstraintDef NOT LIKE '%SETTLED%'
-        BEGIN
+        DECLARE @DirDefault NVARCHAR(256);
+        SELECT @DirDefault = d.name FROM sys.default_constraints d
+            JOIN sys.columns c ON d.parent_object_id = c.object_id AND d.parent_column_id = c.column_id
+            WHERE d.parent_object_id = OBJECT_ID('TransactionLog') AND c.name = 'Direction';
+        IF @DirDefault IS NOT NULL EXEC('ALTER TABLE TransactionLog DROP CONSTRAINT ' + @DirDefault);
+
+        IF EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_TransactionLog_Direction')
             ALTER TABLE TransactionLog DROP CONSTRAINT CK_TransactionLog_Direction;
-            ALTER TABLE TransactionLog ADD CONSTRAINT CK_TransactionLog_Direction 
-                CHECK (Direction IN ('INBOUND','OUTBOUND','COMPLETE','TIMEOUT','ERROR','ADVICE','SETTLED'));
-            PRINT '  + Updated CHECK constraint CK_TransactionLog_Direction (added SETTLED)';
-        END
+            
+        ALTER TABLE TransactionLog DROP COLUMN Direction;
+        PRINT '  + Removed Direction column from TransactionLog';
+    END
+
+    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'ProcessingTimeMs')
+    BEGIN
+        DECLARE @PtmDefault NVARCHAR(256);
+        SELECT @PtmDefault = d.name FROM sys.default_constraints d
+            JOIN sys.columns c ON d.parent_object_id = c.object_id AND d.parent_column_id = c.column_id
+            WHERE d.parent_object_id = OBJECT_ID('TransactionLog') AND c.name = 'ProcessingTimeMs';
+        IF @PtmDefault IS NOT NULL EXEC('ALTER TABLE TransactionLog DROP CONSTRAINT ' + @PtmDefault);
+        ALTER TABLE TransactionLog DROP COLUMN ProcessingTimeMs;
+        PRINT '  + Removed ProcessingTimeMs column from TransactionLog';
+    END
+
+    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'LoggedAt')
+    BEGIN
+        DECLARE @LaDefault NVARCHAR(256);
+        SELECT @LaDefault = d.name FROM sys.default_constraints d
+            JOIN sys.columns c ON d.parent_object_id = c.object_id AND d.parent_column_id = c.column_id
+            WHERE d.parent_object_id = OBJECT_ID('TransactionLog') AND c.name = 'LoggedAt';
+        IF @LaDefault IS NOT NULL EXEC('ALTER TABLE TransactionLog DROP CONSTRAINT ' + @LaDefault);
+        ALTER TABLE TransactionLog DROP COLUMN LoggedAt;
+        PRINT '  + Removed LoggedAt column from TransactionLog';
     END
 
     IF NOT EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_TransactionLog_Amount')
@@ -230,377 +357,167 @@ BEGIN
             INCLUDE (Amount, ResponseCode);
         PRINT '  + Created composite index IX_TransactionLog_Settlement';
     END
-END
 
--- ============================================================
--- 2. Create the UnsettledTransactions table
---    Holds all transactions for the current settlement day.
---    At end-of-day, settled records are moved to TransactionLog.
---    Void/reversal can only target MATCHED records from the
---    same SettlementDate.
--- ============================================================
-
--- Phase 2 migration: Rename PendingTransactions ? UnsettledTransactions if the old table exists
-IF EXISTS (SELECT * FROM sysobjects WHERE name='PendingTransactions' AND xtype='U')
-   AND NOT EXISTS (SELECT * FROM sysobjects WHERE name='UnsettledTransactions' AND xtype='U')
-BEGIN
-    EXEC sp_rename 'PendingTransactions', 'UnsettledTransactions';
-    PRINT '  + Renamed PendingTransactions ? UnsettledTransactions';
-
-    -- Rename constraints that reference the old table name
-    IF EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_PendingTransactions_MessageType')
+    -- Phase 4: Add RRN column for reconciliation
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'RRN')
     BEGIN
-        EXEC sp_rename 'CK_PendingTransactions_MessageType', 'CK_UnsettledTransactions_MessageType', 'OBJECT';
-        PRINT '  + Renamed constraint CK_PendingTransactions_MessageType';
-    END
-    IF EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_PendingTransactions_Amount')
-    BEGIN
-        EXEC sp_rename 'CK_PendingTransactions_Amount', 'CK_UnsettledTransactions_Amount', 'OBJECT';
-        PRINT '  + Renamed constraint CK_PendingTransactions_Amount';
-    END
-    IF EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_PendingTransactions_Status')
-    BEGIN
-        -- Drop old constraint and recreate with new values (VOIDED, REVERSED added)
-        ALTER TABLE UnsettledTransactions DROP CONSTRAINT CK_PendingTransactions_Status;
-        ALTER TABLE UnsettledTransactions ADD CONSTRAINT CK_UnsettledTransactions_Status 
-            CHECK (Status IN ('PENDING','MATCHED','MISMATCH','EXPIRED','VOIDED','REVERSED'));
-        PRINT '  + Replaced Status constraint with expanded values (added VOIDED, REVERSED)';
-    END
-    IF EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_PendingTransactions_ResponseCode')
-    BEGIN
-        EXEC sp_rename 'CK_PendingTransactions_ResponseCode', 'CK_UnsettledTransactions_ResponseCode', 'OBJECT';
-        PRINT '  + Renamed constraint CK_PendingTransactions_ResponseCode';
-    END
-END
-
-IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='UnsettledTransactions' and xtype='U')
-BEGIN
-    CREATE TABLE UnsettledTransactions (
-        Id BIGINT PRIMARY KEY IDENTITY(1,1),
-        TransactionId VARCHAR(128) NOT NULL UNIQUE,
-        SessionId VARCHAR(20) NOT NULL,
-        MessageType VARCHAR(4) NOT NULL
-            CONSTRAINT CK_UnsettledTransactions_MessageType CHECK (MessageType LIKE '[0-9][0-9][0-9][0-9]'),
-        
-        -- Transaction classification
-        TransactionType VARCHAR(20) NOT NULL
-            CONSTRAINT CK_UnsettledTransactions_TransactionType 
-            CHECK (TransactionType IN ('PURCHASE','BALANCE_INQUIRY','CASH_WITHDRAWAL','CASH_DEPOSIT',
-                                       'TRANSFER','REFUND','VOID','REVERSAL','FINANCIAL','NETWORK_MGMT')),
-        SettlementDate DATE NOT NULL,
-        
-        -- Request data (encrypted PAN)
-        RequestPAN VARCHAR(128) NULL,   
-        RequestAmount DECIMAL(18,2) NOT NULL
-            CONSTRAINT CK_UnsettledTransactions_Amount CHECK (RequestAmount >= 0),
-        RequestProcessingCode VARCHAR(6) NOT NULL,
-        RequestSTAN VARCHAR(6) NOT NULL,
-        RequestDateTime VARCHAR(10) NOT NULL,
-        RequestAcquirerID VARCHAR(11) NULL,
-        RequestTerminalID VARCHAR(16) NULL,
-        RequestMerchantID VARCHAR(15) NULL,
-        RequestRRN VARCHAR(12) NULL,
-        RequestTRN VARCHAR(50) NULL,
-        
-        -- Full ISO message for complete validation
-        RequestMessageBytes VARBINARY(MAX) NOT NULL,
-        
-        -- Status tracking (VOIDED/REVERSED = void/reversal was successful on this transaction)
-        Status VARCHAR(10) NOT NULL DEFAULT 'PENDING'
-            CONSTRAINT CK_UnsettledTransactions_Status 
-            CHECK (Status IN ('PENDING','MATCHED','MISMATCH','EXPIRED','VOIDED','REVERSED')),
-        CreatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
-        UpdatedAt DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
-        ExpiresAt DATETIME2 NOT NULL,
-        
-        -- Response tracking (ResponseCode for ISO codes only, ErrorReason for mismatch details)
-        ResponseReceivedAt DATETIME2 NULL,
-        ResponseCode VARCHAR(3) NULL
-            CONSTRAINT CK_UnsettledTransactions_ResponseCode CHECK (ResponseCode IS NULL OR LEN(ResponseCode) BETWEEN 2 AND 3),
-        ErrorReason VARCHAR(255) NULL,
-        
-        -- Void/Reversal: link back to the original transaction
-        OriginalTransactionId VARCHAR(128) NULL,
-        
-        INDEX IX_SessionId (SessionId),
-
-        -- Composite index for cleanup query: WHERE Status = 'PENDING' AND ExpiresAt < @Time
-        INDEX IX_UnsettledTransactions_Cleanup (Status, ExpiresAt),
-
-        -- Index for settlement date scoping (void/reversal same-day lookup)
-        INDEX IX_UnsettledTransactions_Settlement (SettlementDate, Status, TransactionType),
-
-        -- Index for original transaction lookup (void/reversal linking)
-        INDEX IX_UnsettledTransactions_OriginalTxn (OriginalTransactionId)
-    );
-
-    -- Composite index for STAN lookup: WHERE RequestSTAN = @STAN AND Status = 'PENDING'
-    CREATE NONCLUSTERED INDEX IX_UnsettledTransactions_STAN_Status 
-        ON UnsettledTransactions(RequestSTAN, Status)
-        INCLUDE (TransactionId, SessionId, CreatedAt);
-
-    -- Composite index for TRN lookup: WHERE RequestTRN = @TRN AND Status = 'PENDING'
-    CREATE NONCLUSTERED INDEX IX_UnsettledTransactions_TRN_Status 
-        ON UnsettledTransactions(RequestTRN, Status)
-        INCLUDE (TransactionId, SessionId, CreatedAt);
-
-    PRINT '  UnsettledTransactions table created successfully';
-END
-ELSE
-BEGIN
-    PRINT '- UnsettledTransactions table already exists, checking for missing columns...'
-
-    -- Widen TransactionId column (was VARCHAR(50), needs 51+ for TXN-yyyyMMddHHmmss-GUID format)
-    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'UnsettledTransactions' AND COLUMN_NAME = 'TransactionId' AND CHARACTER_MAXIMUM_LENGTH < 128)
-    BEGIN
-        ALTER TABLE UnsettledTransactions ALTER COLUMN TransactionId VARCHAR(128) NOT NULL;
-        PRINT '  + Widened TransactionId column to VARCHAR(128)';
+        ALTER TABLE TransactionLog ADD RRN VARCHAR(12) NULL;
+        PRINT '  + Added RRN column';
     END
 
-    -- Sync TRN column
-    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'UnsettledTransactions' AND COLUMN_NAME = 'RequestTRN')
+    -- Phase 4: Add TRN column for transaction reference tracking
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'TRN')
     BEGIN
-        ALTER TABLE UnsettledTransactions ADD RequestTRN VARCHAR(50) NULL;
-        PRINT '  + Added RequestTRN column';
+        ALTER TABLE TransactionLog ADD TRN VARCHAR(50) NULL;
+        PRINT '  + Added TRN column';
     END
 
-    -- Sync ErrorReason column (separates error description from ISO ResponseCode)
-    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'UnsettledTransactions' AND COLUMN_NAME = 'ErrorReason')
+    -- Phase 4: Add AuthorizationCode column (DE#38)
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'AuthorizationCode')
     BEGIN
-        ALTER TABLE UnsettledTransactions ADD ErrorReason VARCHAR(255) NULL;
-        PRINT '  + Added ErrorReason column';
+        ALTER TABLE TransactionLog ADD AuthorizationCode VARCHAR(6) NULL;
+        PRINT '  + Added AuthorizationCode column';
     END
 
-    -- Phase 2: Add TransactionType column
-    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'UnsettledTransactions' AND COLUMN_NAME = 'TransactionType')
+    -- Phase 4: Add CurrencyCode column (DE#49)
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'CurrencyCode')
     BEGIN
-        ALTER TABLE UnsettledTransactions ADD TransactionType VARCHAR(20) NOT NULL DEFAULT 'FINANCIAL';
-        PRINT '  + Added TransactionType column';
+        ALTER TABLE TransactionLog ADD CurrencyCode VARCHAR(3) NULL;
+        PRINT '  + Added CurrencyCode column';
     END
 
-    -- Phase 2: Add SettlementDate column
-    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'UnsettledTransactions' AND COLUMN_NAME = 'SettlementDate')
+    -- Phase 4: Add POSEntryMode column (DE#22) for chip vs mag vs contactless tracking
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'POSEntryMode')
     BEGIN
-        ALTER TABLE UnsettledTransactions ADD SettlementDate DATE NOT NULL DEFAULT CAST(GETUTCDATE() AS DATE);
-        PRINT '  + Added SettlementDate column';
+        ALTER TABLE TransactionLog ADD POSEntryMode VARCHAR(3) NULL;
+        PRINT '  + Added POSEntryMode column';
     END
 
-    -- Phase 2: Add OriginalTransactionId column for void/reversal linking
-    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'UnsettledTransactions' AND COLUMN_NAME = 'OriginalTransactionId')
+    -- Phase 4: RRN index for reconciliation queries
+    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_RRN' AND object_id = OBJECT_ID('TransactionLog'))
     BEGIN
-        ALTER TABLE UnsettledTransactions ADD OriginalTransactionId VARCHAR(128) NULL;
+        CREATE INDEX IX_RRN ON TransactionLog(RRN);
+        PRINT '  + Created index IX_RRN';
+    END
+
+    -- Phase 4: TRN index for transaction reference lookups
+    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_TRN' AND object_id = OBJECT_ID('TransactionLog'))
+    BEGIN
+        CREATE INDEX IX_TRN ON TransactionLog(TRN);
+        PRINT '  + Created index IX_TRN';
+    END
+
+    -- Consolidation: columns migrated from UnsettledTransactions into TransactionLog
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'OriginalTransactionId')
+    BEGIN
+        ALTER TABLE TransactionLog ADD OriginalTransactionId VARCHAR(128) NULL;
         PRINT '  + Added OriginalTransactionId column';
     END
 
-    -- Sync composite TRN+Status index
-    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_UnsettledTransactions_TRN_Status' AND object_id = OBJECT_ID('UnsettledTransactions'))
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'ErrorReason')
     BEGIN
-        CREATE NONCLUSTERED INDEX IX_UnsettledTransactions_TRN_Status 
-            ON UnsettledTransactions(RequestTRN, Status)
-            INCLUDE (TransactionId, SessionId, CreatedAt);
-        PRINT '  + Created composite index IX_UnsettledTransactions_TRN_Status';
+        ALTER TABLE TransactionLog ADD ErrorReason VARCHAR(255) NULL;
+        PRINT '  + Added ErrorReason column';
     END
 
-    -- Sync composite cleanup index (Status + ExpiresAt)
-    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_UnsettledTransactions_Cleanup' AND object_id = OBJECT_ID('UnsettledTransactions'))
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'RequestMessageBytes')
     BEGIN
-        CREATE NONCLUSTERED INDEX IX_UnsettledTransactions_Cleanup 
-            ON UnsettledTransactions(Status, ExpiresAt);
-        PRINT '  + Created composite index IX_UnsettledTransactions_Cleanup';
+        ALTER TABLE TransactionLog ADD RequestMessageBytes VARBINARY(MAX) NULL;
+        PRINT '  + Added RequestMessageBytes column';
     END
 
-    -- Sync composite STAN+Status index
-    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_UnsettledTransactions_STAN_Status' AND object_id = OBJECT_ID('UnsettledTransactions'))
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'TransactionId')
     BEGIN
-        CREATE NONCLUSTERED INDEX IX_UnsettledTransactions_STAN_Status 
-            ON UnsettledTransactions(RequestSTAN, Status)
-            INCLUDE (TransactionId, SessionId, CreatedAt);
-        PRINT '  + Created composite index IX_UnsettledTransactions_STAN_Status';
+        ALTER TABLE TransactionLog ADD TransactionId VARCHAR(128) NULL;
+        PRINT '  + Added TransactionId column';
     END
 
-    -- Phase 2: Settlement date + status + type composite index
-    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_UnsettledTransactions_Settlement' AND object_id = OBJECT_ID('UnsettledTransactions'))
-    BEGIN
-        CREATE NONCLUSTERED INDEX IX_UnsettledTransactions_Settlement
-            ON UnsettledTransactions(SettlementDate, Status, TransactionType);
-        PRINT '  + Created composite index IX_UnsettledTransactions_Settlement';
-    END
-
-    -- Phase 2: Original transaction lookup index
-    IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_UnsettledTransactions_OriginalTxn' AND object_id = OBJECT_ID('UnsettledTransactions'))
-    BEGIN
-        CREATE NONCLUSTERED INDEX IX_UnsettledTransactions_OriginalTxn
-            ON UnsettledTransactions(OriginalTransactionId);
-        PRINT '  + Created index IX_UnsettledTransactions_OriginalTxn';
-    END
-
-    -- Sync CHECK constraints
-    IF NOT EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_UnsettledTransactions_Amount')
-    BEGIN
-        ALTER TABLE UnsettledTransactions ADD CONSTRAINT CK_UnsettledTransactions_Amount 
-            CHECK (RequestAmount >= 0);
-        PRINT '  + Added CHECK constraint CK_UnsettledTransactions_Amount';
-    END
-
-    IF NOT EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_UnsettledTransactions_MessageType')
-    BEGIN
-        ALTER TABLE UnsettledTransactions ADD CONSTRAINT CK_UnsettledTransactions_MessageType 
-            CHECK (MessageType LIKE '[0-9][0-9][0-9][0-9]');
-        PRINT '  + Added CHECK constraint CK_UnsettledTransactions_MessageType';
-    END
-
-    -- Ensure Status CHECK includes VOIDED and REVERSED
-    IF NOT EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_UnsettledTransactions_Status')
-    BEGIN
-        ALTER TABLE UnsettledTransactions ADD CONSTRAINT CK_UnsettledTransactions_Status 
-            CHECK (Status IN ('PENDING','MATCHED','MISMATCH','EXPIRED','VOIDED','REVERSED'));
-        PRINT '  + Added CHECK constraint CK_UnsettledTransactions_Status';
-    END
-    ELSE
-    BEGIN
-        DECLARE @StatusDef NVARCHAR(MAX);
-        SELECT @StatusDef = definition FROM sys.check_constraints WHERE name = 'CK_UnsettledTransactions_Status';
-        IF @StatusDef NOT LIKE '%VOIDED%'
-        BEGIN
-            ALTER TABLE UnsettledTransactions DROP CONSTRAINT CK_UnsettledTransactions_Status;
-            ALTER TABLE UnsettledTransactions ADD CONSTRAINT CK_UnsettledTransactions_Status 
-                CHECK (Status IN ('PENDING','MATCHED','MISMATCH','EXPIRED','VOIDED','REVERSED'));
-            PRINT '  + Updated Status constraint (added VOIDED, REVERSED)';
-        END
-    END
-
-    -- Widen RequestPAN column to hold encrypted (Base64) values
-    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'UnsettledTransactions' AND COLUMN_NAME = 'RequestPAN' AND CHARACTER_MAXIMUM_LENGTH < 128)
-    BEGIN
-        ALTER TABLE UnsettledTransactions ALTER COLUMN RequestPAN VARCHAR(128) NULL;
-        PRINT '  + Widened RequestPAN column to VARCHAR(128) for encrypted storage';
-    END
-END
-
--- ============================================================
--- 3. Create UpdatedAt auto-trigger for UnsettledTransactions
---    Ensures UpdatedAt is always set correctly even for direct
---    SQL updates, not just application-level changes.
--- ============================================================
-
--- Drop old trigger if it references the renamed table
-IF EXISTS (SELECT * FROM sys.triggers WHERE name = 'TR_PendingTransactions_UpdatedAt')
-BEGIN
-    DROP TRIGGER TR_PendingTransactions_UpdatedAt;
-    PRINT '  + Dropped old trigger TR_PendingTransactions_UpdatedAt';
-END
-
-IF NOT EXISTS (SELECT * FROM sys.triggers WHERE name = 'TR_UnsettledTransactions_UpdatedAt')
-BEGIN
+    -- Deferred-compilation block: columns added above (TransactionId, Status, ExpiresAt)
+    -- are not visible to the batch compiler yet. EXEC() creates a new compilation scope
+    -- so the DDL referencing those columns succeeds after the ALTER TABLE has executed.
     EXEC('
-        CREATE TRIGGER TR_UnsettledTransactions_UpdatedAt
-        ON UnsettledTransactions
-        AFTER UPDATE
-        AS
+        IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = ''UQ_TransactionLog_TransactionId'' AND object_id = OBJECT_ID(''TransactionLog''))
+           AND NOT EXISTS (SELECT * FROM sys.indexes WHERE object_id = OBJECT_ID(''TransactionLog'') AND is_unique = 1
+                           AND index_id IN (SELECT ic.index_id FROM sys.index_columns ic
+                                            JOIN sys.columns c ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+                                            WHERE c.name = ''TransactionId'' AND ic.object_id = OBJECT_ID(''TransactionLog'')))
         BEGIN
-            SET NOCOUNT ON;
-            -- Only fire when relevant columns change (avoids recursive trigger)
-            IF UPDATE(Status) OR UPDATE(ResponseCode) OR UPDATE(ErrorReason)
-            BEGIN
-                UPDATE ut
-                SET ut.UpdatedAt = GETUTCDATE()
-                FROM UnsettledTransactions ut
-                INNER JOIN inserted i ON ut.Id = i.Id;
-            END
+            CREATE UNIQUE NONCLUSTERED INDEX UQ_TransactionLog_TransactionId
+                ON TransactionLog(TransactionId)
+                WHERE TransactionId IS NOT NULL;
+            PRINT ''  + Created unique filtered index on TransactionId'';
         END
     ');
-    PRINT '  TR_UnsettledTransactions_UpdatedAt trigger created';
-END
-ELSE
-    PRINT '- TR_UnsettledTransactions_UpdatedAt trigger already exists';
 
-PRINT ''
-PRINT '=== Schema Initialization Complete ==='
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'Status')
+    BEGIN
+        ALTER TABLE TransactionLog ADD Status VARCHAR(10) NOT NULL
+            CONSTRAINT DF_TransactionLog_Status DEFAULT 'PENDING';
+        PRINT '  + Added Status column';
+    END
+
+    EXEC('
+        IF NOT EXISTS (SELECT * FROM sys.check_constraints WHERE name = ''CK_TransactionLog_Status'')
+        BEGIN
+            ALTER TABLE TransactionLog ADD CONSTRAINT CK_TransactionLog_Status 
+                CHECK (Status IN (''PENDING'',''MATCHED'',''MISMATCH'',''EXPIRED'',''VOIDED'',''REVERSED'',''ECHO''));
+            PRINT ''  + Added CHECK constraint CK_TransactionLog_Status'';
+        END
+    ');
+
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'ExpiresAt')
+    BEGIN
+        ALTER TABLE TransactionLog ADD ExpiresAt DATETIME2 NULL;
+        PRINT '  + Added ExpiresAt column';
+    END
+
+    EXEC('
+        IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = ''IX_TransactionLog_Status_Expires'' AND object_id = OBJECT_ID(''TransactionLog''))
+        BEGIN
+            CREATE NONCLUSTERED INDEX IX_TransactionLog_Status_Expires
+                ON TransactionLog(Status, ExpiresAt);
+            PRINT ''  + Created composite index IX_TransactionLog_Status_Expires'';
+        END
+
+        IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = ''IX_TransactionLog_Original'' AND object_id = OBJECT_ID(''TransactionLog''))
+        BEGIN
+            CREATE NONCLUSTERED INDEX IX_TransactionLog_Original
+                ON TransactionLog(OriginalTransactionId);
+            PRINT ''  + Created index IX_TransactionLog_Original'';
+        END
+    ');
+END
+
+-- ============================================================
+-- 3. Drop UnsettledTransactions (Logic consolidated into TransactionLog)
+-- ============================================================
+IF EXISTS (SELECT * FROM sysobjects WHERE name='UnsettledTransactions' and xtype='U')
+BEGIN
+    DROP TABLE UnsettledTransactions;
+    PRINT '  UnsettledTransactions table removed';
+END
+
+IF EXISTS (SELECT * FROM sysobjects WHERE name='PendingTransactions' and xtype='U')
+BEGIN
+    DROP TABLE PendingTransactions;
+    PRINT '  PendingTransactions table removed';
+END
 GO
 
 -- ============================================================
--- 4. Settlement and archival stored procedures
---    sp_SettleTransactions: Run at end of settlement day to move
---      completed transactions from UnsettledTransactions ? TransactionLog.
+-- 4. Archival stored procedures
 --    sp_ArchiveTransactionLog: Run periodically to archive old TransactionLog rows.
---    sp_CleanupUnsettledTransactions: Clean up terminal-state rows after settlement.
 -- ============================================================
 PRINT ''
 PRINT '--- Creating stored procedures ---'
-
--- ============================================================
--- 4a. Settlement procedure: UnsettledTransactions ? TransactionLog
--- ============================================================
-IF EXISTS (SELECT * FROM sys.procedures WHERE name = 'sp_SettleTransactions')
-    DROP PROCEDURE sp_SettleTransactions;
-GO
-
-CREATE PROCEDURE sp_SettleTransactions
-    @SettlementDate DATE = NULL,
-    @BatchSize INT = 10000
-AS
-BEGIN
-    SET NOCOUNT ON;
-    
-    -- Default to yesterday's settlement date (run after midnight)
-    IF @SettlementDate IS NULL
-        SET @SettlementDate = DATEADD(DAY, -1, CAST(GETUTCDATE() AS DATE));
-    
-    DECLARE @Settled INT = 0;
-    DECLARE @TotalSettled INT = 0;
-    
-    -- Move completed transactions (MATCHED, VOIDED, REVERSED) to TransactionLog
-    WHILE 1 = 1
-    BEGIN
-        BEGIN TRANSACTION;
-        
-        INSERT INTO TransactionLog (
-            SessionId, MessageType, PAN, ProcessingCode, Amount, STAN,
-            AcquirerID, ResponseCode, TerminalID, MerchantID,
-            TransactionTime, LoggedAt, ProcessingTimeMs, Direction,
-            TransactionType, SettlementDate
-        )
-        SELECT TOP (@BatchSize)
-            SessionId, MessageType, RequestPAN, RequestProcessingCode, RequestAmount, RequestSTAN,
-            RequestAcquirerID, ResponseCode, RequestTerminalID, RequestMerchantID,
-            CreatedAt, GETUTCDATE(), 0, 'SETTLED',
-            TransactionType, SettlementDate
-        FROM UnsettledTransactions WITH (ROWLOCK)
-        WHERE SettlementDate = @SettlementDate
-          AND Status IN ('MATCHED', 'VOIDED', 'REVERSED');
-        
-        SET @Settled = @@ROWCOUNT;
-        
-        DELETE TOP (@BatchSize)
-        FROM UnsettledTransactions WITH (ROWLOCK)
-        WHERE SettlementDate = @SettlementDate
-          AND Status IN ('MATCHED', 'VOIDED', 'REVERSED');
-        
-        COMMIT TRANSACTION;
-        
-        SET @TotalSettled = @TotalSettled + @Settled;
-        
-        IF @Settled < @BatchSize BREAK;
-        
-        -- Brief pause to reduce contention
-        WAITFOR DELAY '00:00:00.100';
-    END
-    
-    PRINT 'Settled ' + CAST(@TotalSettled AS VARCHAR(20)) + ' transactions for date ' + CONVERT(VARCHAR(10), @SettlementDate, 120);
-END
-GO
-
-PRINT '  sp_SettleTransactions procedure created';
 GO
 
 -- ============================================================
--- 4b. Archive old TransactionLog entries
+-- 4a. Archive old TransactionLog entries
 -- ============================================================
-IF EXISTS (SELECT * FROM sys.procedures WHERE name = 'sp_ArchiveTransactionLog')
-    DROP PROCEDURE sp_ArchiveTransactionLog;
-GO
 
-CREATE PROCEDURE sp_ArchiveTransactionLog
+-- sp_ArchiveTransactionLog: Run periodically to archive old TransactionLog rows.
+CREATE OR ALTER PROCEDURE sp_ArchiveTransactionLog
     @RetentionDays INT = 90,
     @BatchSize INT = 10000
 AS
@@ -611,29 +528,31 @@ BEGIN
     DECLARE @Deleted INT = 0;
     DECLARE @TotalDeleted INT = 0;
     
-    -- Create archive table if it doesn't exist (same structure as source)
+    -- Create archive table if it doesn't exist
     IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TransactionLogArchive' AND xtype='U')
     BEGIN
         SELECT TOP 0 * INTO TransactionLogArchive FROM TransactionLog;
         PRINT 'Created TransactionLogArchive table';
     END
     
-    -- Archive in batches to avoid long-running transactions and lock escalation
     WHILE 1 = 1
     BEGIN
         BEGIN TRANSACTION;
         
         -- Move old rows from hot table to archive
+        -- CRITICAL: Only archive rows that are NOT in PENDING state
         INSERT INTO TransactionLogArchive
         SELECT TOP (@BatchSize) *
         FROM TransactionLog WITH (ROWLOCK)
-        WHERE TransactionTime < @CutoffDate;
+        WHERE TransactionTime < @CutoffDate
+          AND Status != 'PENDING';
         
         SET @Deleted = @@ROWCOUNT;
         
         DELETE TOP (@BatchSize)
         FROM TransactionLog WITH (ROWLOCK)
-        WHERE TransactionTime < @CutoffDate;
+        WHERE TransactionTime < @CutoffDate
+          AND Status != 'PENDING';
         
         COMMIT TRANSACTION;
         
@@ -641,7 +560,6 @@ BEGIN
         
         IF @Deleted < @BatchSize BREAK;
         
-        -- Brief pause to reduce contention on the hot table
         WAITFOR DELAY '00:00:00.100';
     END
     
@@ -649,51 +567,19 @@ BEGIN
 END
 GO
 
-PRINT '  sp_ArchiveTransactionLog procedure created';
-GO
-
--- ============================================================
--- 4c. Cleanup terminal-state UnsettledTransactions after settlement
--- ============================================================
-IF EXISTS (SELECT * FROM sys.procedures WHERE name = 'sp_CleanupPendingTransactions')
-    DROP PROCEDURE sp_CleanupPendingTransactions;
-GO
-
+-- Drop obsolete procedures
 IF EXISTS (SELECT * FROM sys.procedures WHERE name = 'sp_CleanupUnsettledTransactions')
     DROP PROCEDURE sp_CleanupUnsettledTransactions;
 GO
 
-CREATE PROCEDURE sp_CleanupUnsettledTransactions
-    @RetentionDays INT = 7,
-    @BatchSize INT = 5000
-AS
-BEGIN
-    SET NOCOUNT ON;
-    
-    DECLARE @CutoffDate DATETIME2 = DATEADD(DAY, -@RetentionDays, GETUTCDATE());
-    DECLARE @Deleted INT = 0;
-    DECLARE @TotalDeleted INT = 0;
-    
-    -- Only delete terminal-state rows (MATCHED, MISMATCH, EXPIRED, VOIDED, REVERSED) - never delete PENDING
-    -- These should already have been settled; this is a safety net cleanup.
-    WHILE 1 = 1
-    BEGIN
-        DELETE TOP (@BatchSize)
-        FROM UnsettledTransactions WITH (ROWLOCK)
-        WHERE Status IN ('MATCHED', 'MISMATCH', 'EXPIRED', 'VOIDED', 'REVERSED')
-          AND UpdatedAt < @CutoffDate;
-        
-        SET @Deleted = @@ROWCOUNT;
-        SET @TotalDeleted = @TotalDeleted + @Deleted;
-        
-        IF @Deleted < @BatchSize BREAK;
-        
-        WAITFOR DELAY '00:00:00.100';
-    END
-    
-    PRINT 'Cleaned up ' + CAST(@TotalDeleted AS VARCHAR(20)) + ' completed UnsettledTransactions (older than ' + CAST(@RetentionDays AS VARCHAR(10)) + ' days)';
-END
+IF EXISTS (SELECT * FROM sys.procedures WHERE name = 'sp_SettleTransactions')
+    DROP PROCEDURE sp_SettleTransactions;
 GO
 
-PRINT '  sp_CleanupUnsettledTransactions procedure created';
+IF EXISTS (SELECT * FROM sys.procedures WHERE name = 'sp_CleanupPendingTransactions')
+    DROP PROCEDURE sp_CleanupPendingTransactions;
+GO
+
+PRINT ''
+PRINT '=== Schema consolidated and initialized ==='
 GO

@@ -167,10 +167,10 @@ namespace network.Validation
             {
                 string posMode = message.GetField(22)!;
                 string track2 = message.GetField(35)!;
-                
+
                 // Chip transactions: 05, 07, 91 (per Napas spec prefixes)
                 bool isChip = posMode.StartsWith("05") || posMode.StartsWith("07") || posMode.StartsWith("91");
-                
+
                 if (isChip)
                 {
                     // Match based on ISO 7813 structure: [PAN]D[ED]D[SC][DD]
@@ -194,6 +194,23 @@ namespace network.Validation
                             }
                         }
                     }
+                }
+            }
+
+            // 4. CHIP EMV validation: DE#55 (ICC data) is required for chip entry modes
+            if (message.HasField(22) && MtiHelper.IsFinancialRequest(message.MessageType))
+            {
+                bool isChipEntry = message.IsChipTransaction();
+                if (isChipEntry && !message.HasField(55))
+                {
+                    result.AddDataElementResult(new DataElementValidationResult
+                    {
+                        DataElementNumber = 55,
+                        DataElementName = "ICC/EMV Data",
+                        IsValid = false,
+                        ErrorCode = "30",
+                        ErrorMessage = "DE#55 (ICC/EMV data) is required for chip transactions (POS entry mode indicates chip)"
+                    });
                 }
             }
 

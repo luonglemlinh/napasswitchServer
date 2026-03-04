@@ -85,7 +85,7 @@ namespace server
                 else
                 {
                     SwitchLogger.Warn("No HSM provider configured and ALLOW_HSM_STUB is not set.");
-                    Console.WriteLine("[WARNING] No HSM provider. Press 'C' to continue with software stub (DEV ONLY), or any other key to exit");
+                    Console.WriteLine("[WARNING] No HSM provider. Press 'C' to continue with software stub, or any other key to exit");
 
                     var hsmKey = Console.ReadKey();
                     Console.WriteLine();
@@ -222,12 +222,25 @@ namespace server
                         connection);
                     
                     int tableCount = (int)cmd.ExecuteScalar();
-                    
+
                     if (tableCount == 0)
                     {
                         SwitchLogger.Error("TransactionLog table does not exist. Please run the iso.sql script first");
                         return false;
                     }
+
+                    // Drop orphaned objects from prior schema versions that cause runtime errors.
+                    // The UpdatedAt trigger fires on every UPDATE but the column no longer exists.
+                    try
+                    {
+                        using var cleanupCmd = new SqlCommand(@"
+                            IF EXISTS (SELECT * FROM sys.triggers WHERE name = 'TR_UnsettledTransactions_UpdatedAt')
+                                DROP TRIGGER TR_UnsettledTransactions_UpdatedAt;
+                            IF EXISTS (SELECT * FROM sys.triggers WHERE name = 'TR_PendingTransactions_UpdatedAt')
+                                DROP TRIGGER TR_PendingTransactions_UpdatedAt;", connection);
+                        cleanupCmd.ExecuteNonQuery();
+                    }
+                    catch { /* Best effort — schema script will handle it on next run */ }
 
                     return true;
                 }

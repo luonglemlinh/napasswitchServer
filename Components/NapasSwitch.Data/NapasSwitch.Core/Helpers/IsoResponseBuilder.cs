@@ -8,7 +8,7 @@ namespace core.Helpers
     /// </summary>
     public static class IsoResponseBuilder
     {
-        private static readonly int[] EssentialFields = { 2, 3, 4, 7, 11, 12, 13, 32, 33, 37, 41, 42 };
+        private static readonly int[] EssentialFields = { 2, 3, 4, 7, 11, 12, 13, 23, 32, 33, 37, 41, 42 };
 
         /// <summary>
         /// Create a response with the specified response code, copying essential fields from the request.

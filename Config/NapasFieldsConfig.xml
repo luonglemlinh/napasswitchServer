@@ -361,15 +361,15 @@
       <ErrorMessage>Invalid additional amounts format</ErrorMessage>
     </DataElement>
 
-    <!-- DE#55 -->
-    <DataElement Number="55" Name="" Description="">
+    <!-- DE#55 - ICC/EMV Chip Data (TLV encoded). Required for chip transactions (DE#22 = 05x, 07x, 91x) -->
+    <DataElement Number="55" Name="DE55_ICCData" Description="ICC System Related Data (EMV chip data in TLV format)">
       <MinLength>1</MinLength>
       <MaxLength>255</MaxLength>
       <DataType>B</DataType>
-      <Pattern>^[0-9A-F]{1,255}$</Pattern>
+      <Pattern>^[0-9A-F]{1,510}$</Pattern>
       <RequiredIn></RequiredIn>
       <ErrorCode>30</ErrorCode>
-      <ErrorMessage>Invalid ICC data</ErrorMessage>
+      <ErrorMessage>Invalid ICC/EMV data - must be hexadecimal TLV-encoded chip data</ErrorMessage>
     </DataElement>
 
     <!-- DE#60 -->
