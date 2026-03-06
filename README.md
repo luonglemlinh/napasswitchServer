@@ -1,6 +1,8 @@
 # NAPAS Payment Switch Server
 
-A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8.0. This server acts as an intermediary between **Acquirer** institutions (ATMs, POS terminals) and **Issuer** banks, routing authorization requests, reversals, and network management messages in real time over raw TCP sockets.
+A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8.0. This server acts as an intermediary between **Acquirer** institutions (ATMs, POS terminals) and **Issuer** banks, routing authorization requests, reversals, and network management messages in real time over raw TCP sockets. 
+
+**Transaction types supported: Retail(Purchase), Balance Inquiry, Void/Reversal
 
 > **Disclaimer**: This is a testing/simulation environment. It is not affiliated with or endorsed by the real NAPAS (National Payment Corporation of Vietnam).
 
@@ -184,9 +186,9 @@ Defines which TCP ports the server listens on and general settings.
 <ServerConfiguration>
   <!-- Ports for Issuer (bank host) connections -->
   <IssuerPorts>
-    <Port>2222</Port>  <!-- ACB -->
-    <Port>3333</Port>  <!-- PGB -->
-    <Port>4444</Port>  <!-- BIDV -->
+    <Port>****</Port>  <!-- ACB -->
+    <Port>****</Port>  <!-- PGB -->
+    <Port>****</Port>  <!-- BIDV -->
   </IssuerPorts>
 
   <!-- Ports for Acquirer (ATM/POS) connections -->
@@ -202,8 +204,8 @@ Defines which TCP ports the server listens on and general settings.
 
   <!-- Default values for mandatory NAPAS data elements -->
   <Defaults>
-    <DefaultAcquirerId>970418</DefaultAcquirerId>
-    <DefaultCurrencyCode>704</DefaultCurrencyCode>  <!-- VND -->
+    <DefaultAcquirerId>******</DefaultAcquirerId>
+    <DefaultCurrencyCode>***</DefaultCurrencyCode>  <!-- VND -->
     <!-- ... other defaults ... -->
   </Defaults>
 </ServerConfiguration>
@@ -223,10 +225,10 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
     <Bank>
       <BankCode>ACB</BankCode>           <!-- Short code (internal) -->
       <BankName>Asia Commercial Bank</BankName>
-      <IssuerCode>970416</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
+      <IssuerCode>*****</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
       <IssuerName>ACB</IssuerName>
-      <Host>10.145.48.70</Host>          <!-- Issuer's IP address -->
-      <Port>2222</Port>                  <!-- Issuer's TCP port -->
+      <Host>****</Host>          <!-- Issuer's IP address -->
+      <Port>****</Port>                  <!-- Issuer's TCP port -->
       <Timeout>30000</Timeout>           <!-- Connection timeout (ms) -->
       <Bins>
         <Bin>970416</Bin>                <!-- Card BIN(s) that route here -->
@@ -245,8 +247,8 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
 
 **Environment variable overrides**: You can override host/port at runtime without changing XML:
 ```bash
-export NAPAS_BIN_HOST_ACB=192.168.1.100
-export NAPAS_BIN_PORT_ACB=5555
+export NAPAS_BIN_HOST_ACB=*******
+export NAPAS_BIN_PORT_ACB=****
 ```
 
 ---
