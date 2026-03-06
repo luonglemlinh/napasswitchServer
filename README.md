@@ -2,7 +2,7 @@
 
 A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8.0. This server acts as an intermediary between **Acquirer** institutions (ATMs, POS terminals) and **Issuer** banks, routing authorization requests, reversals, and network management messages in real time over raw TCP sockets. 
 
-**Transaction types supported: Retail(Purchase), Balance Inquiry, Void/Reversal
+**Transaction types supported: Retail(Purchase), Balance Inquiry, Void/Reversal**
 
 > **Disclaimer**: This is a testing/simulation environment. It is not affiliated with or endorsed by the real NAPAS (National Payment Corporation of Vietnam).
 
