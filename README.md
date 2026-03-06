@@ -37,21 +37,21 @@ A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8
 
 ```
 ┌─────────────────┐         ┌─────────────────────────────────────┐         ┌─────────────────┐
-│   Acquirer       │  TCP    │         NAPAS Switch Server         │  TCP    │     Issuer       │
-│  (ATM / POS)     ├────────►│                                     ├────────►│   (Bank Host)    │
-│                  │  :1177  │  ┌─────────┐  ┌──────────┐         │  :2222  │                  │
-│  Sends ISO 8583  │         │  │ Parser  │  │  Router  │         │  :3333  │  Approves /      │
-│  Authorization   │         │  │ (Parse  │──│ (BIN     │         │  :4444  │  Declines the    │
-│  Request         │         │  │  & Build)│  │  Lookup) │         │         │  Transaction     │
-│                  │◄────────┤  └─────────┘  └──────────┘         │◄────────┤                  │
-│  Receives        │  TCP    │  ┌─────────┐  ┌──────────┐         │  TCP    │  Sends ISO 8583  │
-│  Response        │         │  │Security │  │ Logging  │         │         │  Response        │
-│                  │         │  │(PIN Xlat)│  │ (SQL DB) │         │         │                  │
-└─────────────────┘         │  └─────────┘  └──────────┘         │         └─────────────────┘
-                            │  ┌──────────────────────┐          │
-                            │  │  Health Check :8080   │          │
-                            │  └──────────────────────┘          │
-                            └─────────────────────────────────────┘
+│   ACQ           │  TCP    │         NAPAS Switch Server         │  TCP    │        ISS      │
+│                 ├────────►│                                     ├────────►│                 │
+│                 │  Port   │  ┌─────────┐  ┌──────────┐         │  Port    │                  │
+│  Sends ISO 8583 │         │  │ Parser  │  │  Router  │         │          │  Approves /      │
+│  Authorization  │         │  │ (Parse  │──│ (BIN     │         │          │  Declines the    │
+│  Request        │         │  │  & Build)│ │  Lookup) │         │         │  Transaction      │
+│                 │◄────────┤  └─────────┘  └──────────┘         │◄────────┤                  │
+│  Receives       │  TCP    │  ┌─────────┐  ┌──────────┐         │  TCP    │  Sends ISO 8583  │
+│  Response       │         │  │Security │  │ Logging  │         │         │  Response        │
+│                 │          │  │(PIN Xlat)│  │ (SQL DB)│         │         │                  │
+└─────────────────┘          │  └─────────┘  └──────────┘         │         └─────────────────┘
+                             │  ┌──────────────────────┐          │
+                             │  │  Health Check :8080  │          │
+                             │  └──────────────────────┘          │
+                             └────────────────────────────────────┘
 ```
 
 ### Key Concepts
