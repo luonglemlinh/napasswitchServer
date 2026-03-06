@@ -231,7 +231,7 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
       <Port>****</Port>                  <!-- Issuer's TCP port -->
       <Timeout>30000</Timeout>           <!-- Connection timeout (ms) -->
       <Bins>
-        <Bin>970416</Bin>                <!-- Card BIN(s) that route here -->
+        <Bin>****</Bin>                <!-- Card BIN(s) that route here -->
       </Bins>
     </Bank>
     <!-- Add more banks... -->
@@ -261,7 +261,7 @@ Maps Acquirer institution codes to their names. Used for logging and identificat
 <AcquirerRoutingConfiguration>
   <Acquirers>
     <Acquirer>
-      <AcquirerCode>970416</AcquirerCode>
+      <AcquirerCode>****</AcquirerCode>
       <AcquirerID>ACB</AcquirerID>
     </Acquirer>
     <!-- Add more acquirers... -->
@@ -280,12 +280,11 @@ Lookup table for ISO 8583 response codes (DE#39). Used to provide human-readable
 ```xml
 <ResponseCodeConfiguration>
   <Codes>
-    <Code Code="00" Description="Approved Successfully"/>
-    <Code Code="05" Description="Unable to Process"/>
-    <Code Code="14" Description="Invalid Card number"/>
-    <Code Code="51" Description="Insufficient Balance"/>
-    <Code Code="55" Description="Incorrect PIN"/>
-    <Code Code="91" Description="Issuer unavailable"/>
+    <Code Code="code" Description="description"/>
+    <Code Code="code" Description="description"/>
+    <Code Code="code" Description="description"/>
+    <Code Code="code" Description="description"/>
+    <Code Code="code" Description="description"/>
     <!-- ... 40+ response codes defined ... -->
   </Codes>
 </ResponseCodeConfiguration>
