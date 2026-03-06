@@ -193,7 +193,7 @@ Defines which TCP ports the server listens on and general settings.
 
   <!-- Ports for Acquirer (ATM/POS) connections -->
   <AcquirerPorts>
-    <Port>1177</Port>  <!-- Primary ACQ port -->
+    <Port>****</Port>  <!-- Primary ACQ port -->
   </AcquirerPorts>
 
   <Settings>
