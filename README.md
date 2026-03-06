@@ -471,9 +471,9 @@ The server exposes an HTTP health check endpoint on the port defined in `ServerC
     "connected": 2,
     "total": 3,
     "details": {
-      "970416": { "connected": true },
-      "970430": { "connected": true },
-      "970418": { "connected": false }
+      "****": { "connected": true },
+      "****": { "connected": true },
+      "****": { "connected": false }
     }
   }
 }
