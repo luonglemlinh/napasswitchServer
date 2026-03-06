@@ -31,13 +31,13 @@ namespace router
 
         
         /// Get a connection from the pool or create a new one
-        
-        public PooledConnection GetConnection(IssuerBankConfig issuerBank)
+
+        public async Task<PooledConnection> GetConnectionAsync(IssuerBankConfig issuerBank)
         {
             string poolKey = $"{issuerBank.Host}:{issuerBank.Port}";
-            
+
             var poolEntry = _pools.GetOrAdd(poolKey, _ => new ConnectionPoolEntry(_maxPoolSize));
-            
+
             // Try to get existing connection from pool
             if (poolEntry.TryGetConnection(out TcpClient? existingClient, out NetworkStream? existingStream) 
                 && existingClient != null && existingStream != null)
@@ -55,24 +55,37 @@ namespace router
                 }
             }
 
-            // Create new connection
+            // Create new connection — fully async, no thread blocking
             SwitchLogger.Info($"[POOL] Creating new connection to {poolKey}");
             var client = new TcpClient();
-            
-            // Use async connect with timeout instead of blocking
-            var connectTask = client.ConnectAsync(issuerBank.Host, issuerBank.Port);
-            if (!connectTask.Wait(issuerBank.Timeout))
+
+            using var cts = new CancellationTokenSource(issuerBank.Timeout);
+            try
+            {
+                await client.ConnectAsync(issuerBank.Host, issuerBank.Port, cts.Token);
+            }
+            catch (OperationCanceledException)
             {
                 client.Close();
                 throw new TimeoutException($"Connection to {poolKey} timed out after {issuerBank.Timeout}ms");
             }
-            
+
             var stream = client.GetStream();
             stream.ReadTimeout = issuerBank.Timeout;
             stream.WriteTimeout = issuerBank.Timeout;
 
             poolEntry.IncrementActiveCount();
             return new PooledConnection(client, stream, poolEntry, poolKey);
+        }
+
+        /// <summary>
+        /// Synchronous wrapper kept for backward compatibility.
+        /// New code should use GetConnectionAsync.
+        /// </summary>
+        [Obsolete("Use GetConnectionAsync to avoid blocking a thread pool thread.")]
+        public PooledConnection GetConnection(IssuerBankConfig issuerBank)
+        {
+            return GetConnectionAsync(issuerBank).GetAwaiter().GetResult();
         }
 
         

@@ -98,10 +98,14 @@ namespace core.Models
         public string? GetTRN() => GetField(63);
         public void SetTRN(string value) => SetField(63, value);
 
-        
+        /// Field 23: Card Sequence Number (used in chip/EMV transactions)
+        public string? GetCardSequenceNumber() => GetField(23);
+        public void SetCardSequenceNumber(string value) => SetField(23, value);
+
+
         /// Field 39: Response Code
         /// "00" = Approved, "51" = Insufficient Funds, etc.
-        
+
         public string? GetResponseCode() => GetField(39);
         public void SetResponseCode(string value) => SetField(39, value);
 
@@ -111,11 +115,26 @@ namespace core.Models
         public string? GetTerminalID() => GetField(41);
         public void SetTerminalID(string value) => SetField(41, value);
 
-        
+
         /// Field 42: Card Acceptor ID (Merchant ID)
-        
+
         public string? GetMerchantID() => GetField(42);
         public void SetMerchantID(string value) => SetField(42, value);
+
+        /// Field 55: ICC System Related Data (EMV chip data in TLV format)
+        public string? GetICCData() => GetField(55);
+        public void SetICCData(string value) => SetField(55, value);
+
+        /// <summary>
+        /// Check if this is a chip/EMV transaction based on DE#22 POS Entry Mode.
+        /// Chip prefixes: 05 (ICC), 07 (Contactless ICC), 91 (Contactless VSDC).
+        /// </summary>
+        public bool IsChipTransaction()
+        {
+            var posEntryMode = GetField(22);
+            if (string.IsNullOrEmpty(posEntryMode) || posEntryMode.Length < 2) return false;
+            return posEntryMode.StartsWith("05") || posEntryMode.StartsWith("07") || posEntryMode.StartsWith("91");
+        }
 
         /// <summary>
         /// Build DE#90 (Original Data Elements) from an original request message.
@@ -242,6 +261,7 @@ namespace core.Models
                 18 => "Merchant Type",
                 19 => "Acquire Country",
                 22 => "POS Entry Mode",
+                23 => "Card Sequence Number",
                 25 => "POS Condition Code",
                 32 => "Acquirer ID",
                 33 => "Fwd Inst ID Code",
@@ -255,6 +275,7 @@ namespace core.Models
                 49 => "Currency Code",
                 52 => "PIN Block",
                 54 => "Additional Amounts",
+                55 => "ICC/EMV Data",
                 63 => "TRN",
                 70 => "Network Info Code",
                 90 => "Original Data Elements",

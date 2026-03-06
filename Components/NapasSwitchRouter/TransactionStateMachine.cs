@@ -44,6 +44,8 @@ namespace router
         public string? ErrorCode { get; set; }
         public string? ErrorMessage { get; set; }
         public string? TRN { get; set; }
+        public byte[]? RequestBytes { get; set; }
+        public List<BufferedLogEntry> BufferedLogs { get; } = new();
 
         private readonly object _lock = new object();
 

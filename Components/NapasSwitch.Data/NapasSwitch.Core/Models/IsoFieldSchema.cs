@@ -11,6 +11,13 @@ namespace core.ISO8583
         public int? MaxLength { get; set; }
         public LengthEncoding LengthEncoding { get; set; } = LengthEncoding.LLVAR;
 
+        /// <summary>
+        /// When true, the field is raw binary on the wire (e.g. DE#52 PIN block = 8 bytes).
+        /// The parser reads FixedLength raw bytes and stores them as a hex string internally.
+        /// The builder converts the hex string back to raw bytes for transmission.
+        /// </summary>
+        public bool IsBinary { get; set; }
+
         public IsoFieldDefinition() { }
 
         public IsoFieldDefinition(int fieldNumber, string description, FieldType type, int? fixedLength = null, int? maxLength = null)
@@ -162,8 +169,9 @@ namespace core.ISO8583
             // DE51: Billing Currency Code - Fixed 3 numeric
             schema.AddField(51, "Currency Code, Cardholder Billing", FieldType.Fixed, fixedLength: 3);
             
-            // DE52: PIN Data - Fixed 16 hex
-            schema.AddField(52, "PIN Data", FieldType.Fixed, fixedLength: 16);
+            // DE52: PIN Data - Fixed 8 bytes binary (64-bit PIN block)
+            // Wire: 8 raw bytes | Internal: 16-char hex string (e.g. "0123456789ABCDEF")
+            schema.Fields[52] = new IsoFieldDefinition(52, "PIN Data", FieldType.Fixed, fixedLength: 8) { IsBinary = true };
             
             // DE54: Additional Amounts - LLLVAR, max 120
             var de54 = new IsoFieldDefinition(54, "Additional Amounts", FieldType.Variable, maxLength: 120);
@@ -190,6 +198,9 @@ namespace core.ISO8583
             de63.LengthEncoding = LengthEncoding.LLLVAR;
             schema.Fields[63] = de63;
             
+            // DE64: MAC - Fixed 8 bytes binary
+            schema.Fields[64] = new IsoFieldDefinition(64, "MAC", FieldType.Fixed, fixedLength: 8) { IsBinary = true };
+
             // DE70: Network Management Information Code - Fixed 3 numeric
             schema.AddField(70, "Network Management Information Code", FieldType.Fixed, fixedLength: 3);
 
@@ -226,8 +237,8 @@ namespace core.ISO8583
             // DE123: POS Data Code - Fixed 15 alphanumeric
             schema.AddField(123, "POS Data Code", FieldType.Fixed, fixedLength: 15);
 
-            // DE128: MAC - Fixed 16 alphanumeric
-            schema.AddField(128, "MAC", FieldType.Fixed, fixedLength: 16);
+            // DE128: MAC - Fixed 8 bytes binary
+            schema.Fields[128] = new IsoFieldDefinition(128, "MAC", FieldType.Fixed, fixedLength: 8) { IsBinary = true };
 
             return schema;
         }

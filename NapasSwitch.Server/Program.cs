@@ -1,6 +1,9 @@
 using System;
 using Microsoft.Data.SqlClient;
 using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 using core.Configuration;
 using core.Helpers;
 using core.Security;
@@ -9,9 +12,14 @@ namespace server
 {
     class Program
     {
-        static async System.Threading.Tasks.Task Main(string[] args)
+        static async Task Main(string[] args)
         {
-            Console.Title = "NAPAS Payment Switch Server";
+            bool headless = args.Contains("--headless")
+                || Environment.GetEnvironmentVariable("NAPAS_HEADLESS") == "true";
+
+            if (!headless)
+                Console.Title = "NAPAS Payment Switch Server";
+
             SwitchLogger.Initialize();
 
             Console.WriteLine(@"
@@ -32,8 +40,7 @@ namespace server
                 if (configPath == null)
                 {
                     SwitchLogger.Error("Config directory not found. Please create a 'Config' folder at the solution root with: BINconfig.xml, ACQconfig.xml, RCconfig.xml, DBconfig.xml");
-                    Console.WriteLine("\n[INFO] Press any key to exit...");
-                    Console.ReadKey();
+                    if (!headless) { Console.WriteLine("\nPress any key to exit..."); Console.ReadKey(); }
                     return;
                 }
                 
@@ -54,20 +61,29 @@ namespace server
                     else
                     {
                         SwitchLogger.Warn("Database connection failed");
-                        Console.WriteLine("[WARNING] Press 'C' to continue without logging, or any other key to exit");
 
-                        var key = Console.ReadKey();
-                        Console.WriteLine();
-
-                        if (key.Key != ConsoleKey.C)
+                        if (headless)
                         {
-                            SwitchLogger.Info("Startup cancelled");
-                            return;
+                            SwitchLogger.Warn("Headless mode: continuing without database logging");
+                            enableLogging = false;
+                            dbConnectionString = "";
                         }
+                        else
+                        {
+                            Console.WriteLine("Press 'C' to continue without logging, or any other key to exit");
+                            var key = Console.ReadKey();
+                            Console.WriteLine();
 
-                        enableLogging = false;
-                        dbConnectionString = "";
-                        SwitchLogger.Info("Continuing without database logging");
+                            if (key.Key != ConsoleKey.C)
+                            {
+                                SwitchLogger.Info("Startup cancelled");
+                                return;
+                            }
+
+                            enableLogging = false;
+                            dbConnectionString = "";
+                            SwitchLogger.Info("Continuing without database logging");
+                        }
                     }
                 }
                 else
@@ -82,10 +98,15 @@ namespace server
                 {
                     hsmProvider = new SoftwareHsmStub();
                 }
+                else if (headless)
+                {
+                    hsmProvider = new SoftwareHsmStub();
+                    SwitchLogger.ForContext("SECURITY").Warn("Headless mode: using SoftwareHsmStub. NOT FOR PRODUCTION!");
+                }
                 else
                 {
                     SwitchLogger.Warn("No HSM provider configured and ALLOW_HSM_STUB is not set.");
-                    Console.WriteLine("[WARNING] No HSM provider. Press 'C' to continue with software stub (DEV ONLY), or any other key to exit");
+                    Console.WriteLine("No HSM provider. Press 'C' to continue with software stub, or any other key to exit");
 
                     var hsmKey = Console.ReadKey();
                     Console.WriteLine();
@@ -108,66 +129,79 @@ namespace server
 
                 using var server = new TcpSwitchServer(ports, dbConnectionString, enableLogging, hsmProvider);
 
-                Console.WriteLine("\n[READY] Press ENTER to start the server, or 'Q' to quit...");
-                var startKey = Console.ReadKey();
-                Console.WriteLine();
-                
-                if (startKey.Key == ConsoleKey.Q)
+                if (!headless)
                 {
-                    SwitchLogger.Info("Server startup cancelled");
-                    return;
+                    Console.WriteLine("\nPress ENTER to start the server, or 'Q' to quit...");
+                    var startKey = Console.ReadKey();
+                    Console.WriteLine();
+
+                    if (startKey.Key == ConsoleKey.Q)
+                    {
+                        SwitchLogger.Info("Server startup cancelled");
+                        return;
+                    }
                 }
 
                 // Step 6: Connect to TS (persistent connection)
                 SwitchLogger.Info("Connecting to Transaction Switch...");
-                await server.ConnectToTSAsync(); // Use await, don't block with .Wait()
+                await server.ConnectToTSAsync();
 
                 Console.WriteLine();
-
-                // Start server
                 server.Start();
 
-                // Console command loop
-                Console.WriteLine(" Commands: [S] Show connections  [P] Pause/Resume  [Q] Quit");
-                Console.WriteLine();
-
-                bool running = true;
-                bool paused = false;
-                while (running)
+                if (headless)
                 {
-                    if (Console.KeyAvailable)
+                    var cts = new CancellationTokenSource();
+                    Console.CancelKeyPress += (_, e) => { e.Cancel = true; cts.Cancel(); };
+                    AppDomain.CurrentDomain.ProcessExit += (_, _) => cts.Cancel();
+                    try { await Task.Delay(Timeout.Infinite, cts.Token); }
+                    catch (TaskCanceledException) { }
+                    SwitchLogger.Info("Shutdown signal received");
+                    server.Stop();
+                }
+                else
+                {
+                    Console.WriteLine(" Commands: [S] Show connections  [P] Pause/Resume  [Q] Quit");
+                    Console.WriteLine();
+
+                    bool running = true;
+                    bool paused = false;
+                    while (running)
                     {
-                        var cmd = Console.ReadKey(intercept: true);
-                        switch (cmd.Key)
+                        if (Console.KeyAvailable)
                         {
-                            case ConsoleKey.S:
-                                server.PrintActiveConnections();
-                                break;
-                            case ConsoleKey.P:
-                                if (!paused)
-                                {
-                                    server.Stop();
-                                    paused = true;
-                                    SwitchLogger.Info("Server paused — press [P] to resume");
-                                    Console.WriteLine(" ** SERVER PAUSED — press [P] to resume, [Q] to quit **");
-                                }
-                                else
-                                {
-                                    server.Start();
-                                    paused = false;
-                                    SwitchLogger.Info("Server resumed");
-                                }
-                                break;
-                            case ConsoleKey.Q:
-                                SwitchLogger.Info("Shutting down server...");
-                                if (!paused) server.Stop();
-                                running = false;
-                                break;
+                            var cmd = Console.ReadKey(intercept: true);
+                            switch (cmd.Key)
+                            {
+                                case ConsoleKey.S:
+                                    server.PrintActiveConnections();
+                                    break;
+                                case ConsoleKey.P:
+                                    if (!paused)
+                                    {
+                                        server.Stop();
+                                        paused = true;
+                                        SwitchLogger.Info("Server paused — press [P] to resume");
+                                        Console.WriteLine(" ** SERVER PAUSED — press [P] to resume, [Q] to quit **");
+                                    }
+                                    else
+                                    {
+                                        server.Start();
+                                        paused = false;
+                                        SwitchLogger.Info("Server resumed");
+                                    }
+                                    break;
+                                case ConsoleKey.Q:
+                                    SwitchLogger.Info("Shutting down server...");
+                                    if (!paused) server.Stop();
+                                    running = false;
+                                    break;
+                            }
                         }
-                    }
-                    else
-                    {
-                        await System.Threading.Tasks.Task.Delay(100);
+                        else
+                        {
+                            await Task.Delay(100);
+                        }
                     }
                 }
             }
@@ -182,8 +216,11 @@ namespace server
             finally
             {
                 SwitchLogger.CloseAndFlush();
-                Console.WriteLine("\n[INFO] Press any key to exit...");
-                Console.ReadKey();
+                if (!headless)
+                {
+                    Console.WriteLine("\nPress any key to exit...");
+                    Console.ReadKey();
+                }
             }
         }
 
@@ -222,12 +259,25 @@ namespace server
                         connection);
                     
                     int tableCount = (int)cmd.ExecuteScalar();
-                    
+
                     if (tableCount == 0)
                     {
                         SwitchLogger.Error("TransactionLog table does not exist. Please run the iso.sql script first");
                         return false;
                     }
+
+                    // Drop orphaned objects from prior schema versions that cause runtime errors.
+                    // The UpdatedAt trigger fires on every UPDATE but the column no longer exists.
+                    try
+                    {
+                        using var cleanupCmd = new SqlCommand(@"
+                            IF EXISTS (SELECT * FROM sys.triggers WHERE name = 'TR_UnsettledTransactions_UpdatedAt')
+                                DROP TRIGGER TR_UnsettledTransactions_UpdatedAt;
+                            IF EXISTS (SELECT * FROM sys.triggers WHERE name = 'TR_PendingTransactions_UpdatedAt')
+                                DROP TRIGGER TR_PendingTransactions_UpdatedAt;", connection);
+                        cleanupCmd.ExecuteNonQuery();
+                    }
+                    catch { /* Best effort — schema script will handle it on next run */ }
 
                     return true;
                 }

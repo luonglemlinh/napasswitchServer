@@ -24,26 +24,29 @@ namespace server
         private readonly Func<TransactionStateMachineStats> _getTxnStats;
         private readonly ConcurrentDictionary<string, TSConnectionManager> _issuerConnections;
         private readonly DateTime _serverStartTime;
+        private readonly IConfigurationLoader _config;
 
         public HealthCheckServer(
             Func<bool> isRunning,
             Func<ServerStats> getStats,
             Func<TransactionStateMachineStats> getTxnStats,
             ConcurrentDictionary<string, TSConnectionManager> issuerConnections,
-            DateTime serverStartTime)
+            DateTime serverStartTime,
+            IConfigurationLoader config)
         {
             _isRunning = isRunning;
             _getStats = getStats;
             _getTxnStats = getTxnStats;
             _issuerConnections = issuerConnections;
             _serverStartTime = serverStartTime;
+            _config = config;
         }
 
         public void Start()
         {
             try
             {
-                var serverConfig = ConfigurationLoader.Instance.ServerConfig;
+                var serverConfig = _config.ServerConfig;
                 int port = serverConfig.Settings.HealthCheckPort;
                 if (port <= 0) return;
 

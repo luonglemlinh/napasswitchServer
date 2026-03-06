@@ -18,10 +18,11 @@ public class MtiHelperTests
     [Theory]
     [InlineData("0210", true)]
     [InlineData("0410", true)]
-    [InlineData("0430", false)]  // 3rd char is '3', not '1' — IsResponse checks mti[2] == '1'
+    [InlineData("0430", true)]   // Advice response — mti[2] == '3' is also a response
     [InlineData("0810", true)]
     [InlineData("0200", false)]
     [InlineData("0400", false)]
+    [InlineData("0420", false)]  // Advice request, not a response
     [InlineData("0800", false)]
     public void IsResponse_ShouldIdentifyResponseMTIs(string mti, bool expected)
     {
@@ -41,7 +42,7 @@ public class MtiHelperTests
     [Theory]
     [InlineData("0200", true)]
     [InlineData("0400", true)]
-    [InlineData("0420", false)]
+    [InlineData("0420", true)]   // Advice requires store tracking for same-day void/reversal
     [InlineData("0800", false)]
     public void IsFinancialRequest_ShouldIdentifyFinancialRequests(string mti, bool expected)
     {
