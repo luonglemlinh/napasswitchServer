@@ -45,7 +45,6 @@ public class TcpSwitchServer : IDisposable
     private bool _disposed;
     private Timer? _statsTimer;
     private Timer? _poolHealthTimer;
-    private Timer? _cleanupTimer;
     private CancellationTokenSource? _serverCts;
 
     // Persistent connection managers for all issuers
@@ -225,17 +224,6 @@ public class TcpSwitchServer : IDisposable
             _healthCheck.Start();
         }
 
-        private async Task HandleHealthCheckRequestAsync(HttpListenerContext ctx)
-        {
-            // Delegated to HealthCheckServer — this method kept for backward compat only
-            await Task.CompletedTask;
-        }
-
-        private string BuildHealthJson()
-        {
-            return "{}"; // Delegated to HealthCheckServer
-        }
-        
         private void LogServerStats(object? state)
         {
             var stats = GetStats();
@@ -515,6 +503,10 @@ public class TcpSwitchServer : IDisposable
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = !string.IsNullOrEmpty(clearPan) ? _securityProvider.EncryptPAN(clearPan) : null;
 
+                string? curCode = request.GetField(49);
+                string? posMode = request.GetField(22);
+                string? settlementDate = request.GetField(15);
+
                 if (MtiHelper.IsFinancialRequest(request.MessageType))
                 {
                     if (!MtiHelper.IsAdvice(request.MessageType) && _transactionLogger != null)
@@ -533,7 +525,7 @@ public class TcpSwitchServer : IDisposable
                     txnContext.RequestBytes = messageBytes;
                     var requestCopy = CloneWithEncryptedPan(request, encryptedPan);
                     if (_transactionLogger != null) 
-                        _ = _transactionLogger.LogRequestAsync(requestCopy, messageBytes, txnContext.TransactionId, sessionId);
+                        _ = _transactionLogger.LogRequestAsync(requestCopy, messageBytes, txnContext.TransactionId, sessionId, 5, curCode, posMode, settlementDate);
                 }
 
                 IsoMessage response = request.MessageType switch
@@ -565,7 +557,7 @@ public class TcpSwitchServer : IDisposable
                         txnContext.TryTransitionTo(TransactionState.Failed, "30", "Correlation failed");
                         response = IsoResponseBuilder.CreateErrorResponse(request, "30");
                     }
-                    else if (_transactionLogger != null) await _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId);
+                    else if (_transactionLogger != null) await _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId, curCode, posMode, settlementDate);
                 }
                 else if (MtiHelper.IsAdvice(request.MessageType))
                 {
@@ -579,7 +571,7 @@ public class TcpSwitchServer : IDisposable
                 stopwatch.Stop();
                 int timeMs = (int)stopwatch.ElapsedMilliseconds;
 
-                if (_transactionLogger != null && txnContext != null) _ = _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId);
+                if (_transactionLogger != null && txnContext != null) _ = _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId, curCode, posMode, settlementDate);
 
                 // 11.2: Record completion metrics
                 string? rc = response.GetField(39);
@@ -649,18 +641,14 @@ public class TcpSwitchServer : IDisposable
             if (issuerBank == null) return IsoResponseBuilder.CreateErrorResponse(request, "15");
 
             PrepareMessageForRouting(request, issuerBank, sessionId);
-            TranslatePinBlockForIssuer(request, issuerBank, sessionId);
 
             txnContext.TryTransitionTo(TransactionState.Routing);
-            
+
             BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), request.GetIssuerID(), request, _parser.Build(request));
 
-            var response = await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
+            var response = await ForwardPinTransactionAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
 
             BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), response.GetIssuerID(), response, _parser.Build(response));
-
-            // Translate DE#52 in ISS response back to ACQ zone key
-            TranslatePinBlockForAcquirer(response, request, sessionId);
 
             return response;
         }
@@ -764,6 +752,29 @@ public class TcpSwitchServer : IDisposable
             {
                 SwitchLogger.Warn($"  [{sessionId}] PIN block translation back failed: {ex.Message}");
             }
+        }
+
+        /// <summary>
+        /// Forward a PIN transaction (DE#52) to the issuer with full PIN block translation.
+        /// Translates the PIN block from the acquirer's zone key to the issuer's zone key
+        /// before forwarding, routes the message, then translates the response PIN block
+        /// back to the acquirer's zone key.
+        /// For non-PIN transactions (no DE#52), the message is routed without translation.
+        /// </summary>
+        private async Task<IsoMessage> ForwardPinTransactionAsync(
+            IsoMessage request,
+            IssuerBankConfig issuerBank,
+            string sessionId,
+            TransactionContext txnContext,
+            CancellationToken cancellationToken)
+        {
+            TranslatePinBlockForIssuer(request, issuerBank, sessionId);
+
+            var response = await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
+
+            TranslatePinBlockForAcquirer(response, request, sessionId);
+
+            return response;
         }
 
         private void BufferLog(TransactionContext? ctx, string direction, string? acq, string? iss, IsoMessage? msg, byte[]? bytes)
@@ -915,14 +926,17 @@ public class TcpSwitchServer : IDisposable
                 }
 
                 // Look up original financial transaction (PURCHASE, etc.) from today's settlement.
-                IsoMessage? original = null;
+                OriginalTransactionInfo? originalInfo = null;
                 if (_transactionLogger != null)
                 {
                     string? trn = request.GetTRN();
                     string? stan = request.GetSTAN();
                     string? acqId = request.GetAcquirerID();
-                    original = await _transactionLogger.GetOriginalRequestAsync(trn, stan, acqId);
+                    originalInfo = await _transactionLogger.GetOriginalRequestAsync(trn, stan, acqId);
                 }
+
+                IsoMessage? original = originalInfo?.Message;
+                string? originalTransactionId = originalInfo?.TransactionId;
 
                 // Reversal (not void): Only forward if original transaction is found
                 if (!isVoid && original == null)
@@ -960,7 +974,8 @@ public class TcpSwitchServer : IDisposable
                     "ISS {TxnType} response: RC={RC}. Session={SessionId}", txnType, rc ?? "N/A", sessionId);
 
                 if (_transactionLogger != null)
-                    _ = _transactionLogger.LogTransactionAsync(request, issuerResponse, txnContext.TransactionId, sessionId);
+                    _ = _transactionLogger.LogTransactionAsync(request, issuerResponse, txnContext.TransactionId, sessionId, 
+                        request.GetField(49), request.GetField(22), request.GetField(15), originalTransactionId);
                 
                 FlushBufferedLogs(txnContext);
             }
@@ -989,6 +1004,7 @@ public class TcpSwitchServer : IDisposable
                 if (issuerBank == null) return false;
 
                 PrepareMessageForRouting(entry.Request, issuerBank, entry.SessionId);
+                TranslatePinBlockForIssuer(entry.Request, issuerBank, entry.SessionId);
 
                 IsoMessage? response = null;
                 if (_issuerConnections.TryGetValue(issuerBank.IssuerCode, out var manager) && manager.IsAnyConnected)
@@ -1025,12 +1041,15 @@ public class TcpSwitchServer : IDisposable
         {
             SwitchLogger.Info($" [{sessionId}] Processing reversal request");
             
+            string? originalTransactionId = null;
             if (_transactionLogger != null)
             {
                 string? trn = request.GetTRN();
                 string? stan = request.GetSTAN();
                 string? acqId = request.GetAcquirerID();
-                var original = await _transactionLogger.GetOriginalRequestAsync(trn, stan, acqId);
+                var originalInfo = await _transactionLogger.GetOriginalRequestAsync(trn, stan, acqId);
+                var original = originalInfo?.Message;
+                originalTransactionId = originalInfo?.TransactionId;
                 
                 if (original == null)
                 {
@@ -1051,15 +1070,17 @@ public class TcpSwitchServer : IDisposable
             if (issuerBank == null) return IsoResponseBuilder.CreateErrorResponse(request, "15");
 
             PrepareMessageForRouting(request, issuerBank, sessionId);
-            TranslatePinBlockForIssuer(request, issuerBank, sessionId);
-            
+
             txnContext.TryTransitionTo(TransactionState.Reversing);
             BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), request.GetIssuerID(), request, _parser.Build(request));
-            var response = await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
+            var response = await ForwardPinTransactionAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
             BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), response.GetIssuerID(), response, _parser.Build(response));
 
-            // Translate DE#52 in ISS response back to ACQ zone key
-            TranslatePinBlockForAcquirer(response, request, sessionId);
+            if (_transactionLogger != null)
+            {
+                _ = _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId,
+                    request.GetField(49), request.GetField(22), request.GetField(15), originalTransactionId);
+            }
 
             if (response.GetField(39) == "00")
                 txnContext.TryTransitionTo(TransactionState.Reversed);
@@ -1326,7 +1347,6 @@ public class TcpSwitchServer : IDisposable
 
             _statsTimer?.Dispose();
             _poolHealthTimer?.Dispose();
-            _cleanupTimer?.Dispose();
             _healthCheck.Dispose();
             _safQueue?.Dispose();
             _serverCts?.Dispose();

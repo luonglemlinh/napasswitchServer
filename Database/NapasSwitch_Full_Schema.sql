@@ -1,27 +1,3 @@
-    -- NAPAS Switch - Full Database Schema (Idempotent)
--- Paste once in SSMS and run. Works on fresh server or existing database.
--- Includes all phases through Phase 4:
---   - Composite covering indexes for key query patterns
---   - CHECK constraints for data integrity (Amount, MessageType, ResponseCode)
---   - ErrorReason column separation from ResponseCode in UnsettledTransactions
---   - Computed TransactionDate column for future date-based partitioning
---   - Settlement stored procedure (UnsettledTransactions -> TransactionLog at end-of-day)
---   - Archival stored procedures for long-term scalability
---   - Fixed AcquirerID/IssuerID column size mismatch (standardized to VARCHAR(11))
---   - TransactionType column for PURCHASE, BALANCE_INQUIRY, VOID, REVERSAL tracking
---   - SettlementDate column for settlement-day scoping
---   - OriginalTransactionId for void/reversal linking
---   - Phase 3: MessageCycle table for 1-row-per-leg cycle tracking (ACQ/ISS/RawMessage)
---   - Phase 3: Removed cycle timestamps from TransactionLog and UnsettledTransactions
---   - Phase 3: Differentiated Void/Reversal via CancellationType in UnsettledTransactions
---   - Phase 4: TransactionLog normalized: RRN, TRN, AuthorizationCode, CurrencyCode, POSEntryMode
---   - Phase 4: UnsettledTransactions: RequestIssuerID for issuer tracking
---   - Phase 4: MessageCycle: ResponseCode for quick response filtering
---   - Phase 4: CHIP EMV support (DE#55 validation, POS entry mode tracking)
-
--- ============================================================
--- 0. Create database if it doesn't exist, then switch to it
--- ============================================================
 IF NOT EXISTS (SELECT name FROM sys.databases WHERE name = N'NAPASSwitch')
 BEGIN
     CREATE DATABASE [NAPASSwitch];

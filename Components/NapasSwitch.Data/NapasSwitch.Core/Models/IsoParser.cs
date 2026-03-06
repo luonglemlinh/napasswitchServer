@@ -217,33 +217,44 @@ public class IsoParser
     {
         return fieldDef.Type switch
         {
-            FieldType.Fixed => ExtractFixedField(data, fieldDef.FixedLength!.Value, ref offset),
-            FieldType.Variable => ExtractVariableField(data, fieldDef.LengthEncoding, ref offset),
+            FieldType.Fixed => ExtractFixedField(data, fieldDef, ref offset),
+            FieldType.Variable => ExtractVariableField(data, fieldDef, ref offset),
             _ => throw new InvalidOperationException($"Unknown field type: {fieldDef.Type}")
         };
     }
 
-    private string ExtractFixedField(byte[] data, int length, ref int offset)
+    private string ExtractFixedField(byte[] data, IsoFieldDefinition fieldDef, ref int offset)
     {
+        int length = fieldDef.FixedLength!.Value;
         if (offset + length > data.Length)
-            throw new ArgumentException($"Insufficient data for fixed field. Expected {length} bytes at offset {offset}, but only {data.Length - offset} bytes remain.");
+            throw new ArgumentException($"Insufficient data for fixed field DE#{fieldDef.FieldNumber}. Expected {length} bytes at offset {offset}, but only {data.Length - offset} bytes remain.");
 
-        string value = System.Text.Encoding.ASCII.GetString(data, offset, length);
+        string value;
+        if (fieldDef.IsBinary)
+        {
+            // Binary data (like PIN block) is converted to HEX string internally
+            value = BitConverter.ToString(data, offset, length).Replace("-", "");
+        }
+        else
+        {
+            value = System.Text.Encoding.ASCII.GetString(data, offset, length);
+        }
+        
         offset += length;
         return value;
     }
 
-    private string ExtractVariableField(byte[] data, LengthEncoding encoding, ref int offset)
+    private string ExtractVariableField(byte[] data, IsoFieldDefinition fieldDef, ref int offset)
     {
-        int digits = encoding switch
+        int digits = fieldDef.LengthEncoding switch
         {
             LengthEncoding.LLVAR => 2,
             LengthEncoding.LLLVAR => 3,
-            _ => throw new InvalidOperationException($"Unknown encoding: {encoding}")
+            _ => throw new InvalidOperationException($"Unknown encoding: {fieldDef.LengthEncoding}")
         };
 
         if (offset + digits > data.Length)
-            throw new ArgumentException($"Insufficient data for variable field length prefix at offset {offset}");
+            throw new ArgumentException($"Insufficient data for variable field DE#{fieldDef.FieldNumber} length prefix at offset {offset}");
 
         int fieldLength = 0;
         for (int i = 0; i < digits; i++)
@@ -257,9 +268,18 @@ public class IsoParser
         offset += digits;
 
         if (offset + fieldLength > data.Length)
-             throw new ArgumentException($"Insufficient data for variable field content. Expected {fieldLength} bytes at offset {offset}");
+             throw new ArgumentException($"Insufficient data for variable field DE#{fieldDef.FieldNumber} content. Expected {fieldLength} bytes at offset {offset}");
 
-        string value = Encoding.ASCII.GetString(data, offset, fieldLength);
+        string value;
+        if (fieldDef.IsBinary)
+        {
+             value = BitConverter.ToString(data, offset, fieldLength).Replace("-", "");
+        }
+        else
+        {
+            value = Encoding.ASCII.GetString(data, offset, fieldLength);
+        }
+        
         offset += fieldLength;
         return value;
     }
@@ -348,19 +368,45 @@ public class IsoParser
     {
         return fieldDef.Type switch
         {
-            FieldType.Fixed => BuildFixedField(fieldDef.FixedLength!.Value, value),
-            FieldType.Variable => BuildVariableField(fieldDef.LengthEncoding, value),
+            FieldType.Fixed => BuildFixedField(fieldDef, value),
+            FieldType.Variable => BuildVariableField(fieldDef, value),
             _ => throw new InvalidOperationException($"Unknown field type: {fieldDef.Type}")
         };
     }
 
-    private IEnumerable<byte> BuildFixedField(int length, string value)
+    private IEnumerable<byte> BuildFixedField(IsoFieldDefinition fieldDef, string value)
     {
+        int length = fieldDef.FixedLength!.Value;
         var val = value ?? string.Empty;
+
+        if (fieldDef.IsBinary)
+        {
+            // Internal HEX string -> Wire Binary bytes
+            byte[] binary;
+            try
+            {
+                binary = HexStringToBytes(val);
+            }
+            catch
+            {
+                // If not valid hex, fallback to empty/padding or throw
+                binary = new byte[length];
+            }
+
+            if (binary.Length < length)
+            {
+                var padded = new byte[length];
+                Array.Copy(binary, 0, padded, 0, binary.Length);
+                return padded;
+            }
+            return binary.Take(length);
+        }
+
         if (val.Length < length)
             val = val.PadRight(length, ' ');
         else if (val.Length > length)
             val = val.Substring(0, length);
+            
         return Encoding.ASCII.GetBytes(val);
     }
 
@@ -374,24 +420,40 @@ public class IsoParser
     ///   Length: 6 → "06" (2 bytes, zero-padded)
     ///   Output: "06970418" (8 bytes total)
     /// </summary>
-    private IEnumerable<byte> BuildVariableField(LengthEncoding encoding, string value)
+    private IEnumerable<byte> BuildVariableField(IsoFieldDefinition fieldDef, string value)
     {
         var val = value ?? string.Empty;
-        int length = val.Length;
-        
-        // Format length as zero-padded ASCII digits per NAPAS spec
-        // D2 = 2 digits with leading zeros (e.g., 6 → "06")
-        // D3 = 3 digits with leading zeros (e.g., 123 → "123")
-        string prefix = encoding switch
+        byte[] contentBytes;
+        int length;
+
+        if (fieldDef.IsBinary)
         {
-            LengthEncoding.LLVAR => length.ToString("D2"),   // 2 bytes: "06", "11", etc.
-            LengthEncoding.LLLVAR => length.ToString("D3"),  // 3 bytes: "006", "123", etc.
-            _ => throw new InvalidOperationException($"Unknown encoding: {encoding}")
+            try
+            {
+                contentBytes = HexStringToBytes(val);
+            }
+            catch
+            {
+                contentBytes = Array.Empty<byte>();
+            }
+            length = contentBytes.Length;
+        }
+        else
+        {
+            contentBytes = Encoding.ASCII.GetBytes(val);
+            length = contentBytes.Length;
+        }
+
+        string prefix = fieldDef.LengthEncoding switch
+        {
+            LengthEncoding.LLVAR => length.ToString("D2"),
+            LengthEncoding.LLLVAR => length.ToString("D3"),
+            _ => throw new InvalidOperationException($"Unknown encoding: {fieldDef.LengthEncoding}")
         };
 
         var bytes = new List<byte>();
-        bytes.AddRange(Encoding.ASCII.GetBytes(prefix));  // Add length prefix
-        bytes.AddRange(Encoding.ASCII.GetBytes(val));     // Add actual data
+        bytes.AddRange(Encoding.ASCII.GetBytes(prefix));
+        bytes.AddRange(contentBytes);
         return bytes;
     }
 }

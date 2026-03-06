@@ -19,27 +19,14 @@ namespace router
     {
         private readonly IsoParser _parser;
         private readonly IssuerConnectionPool _connectionPool;
-        private readonly RetryPolicy _retryPolicy;
         private bool _disposed;
 
         public IssuerConnector()
         {
             _parser = new IsoParser();
             _connectionPool = new IssuerConnectionPool(maxPoolSize: 10, connectionIdleTimeoutMs: 60000);
-            _retryPolicy = new RetryPolicy(maxRetries: 3, baseDelayMs: 100, maxDelayMs: 5000);
         }
 
-
-        /// Forward a message to the appropriate Issuer bank and wait for response
-        /// Uses connection pooling and retry with exponential backoff
-        /// NOTE: Use ForwardToIssuerAsync instead - this sync wrapper is deprecated and may cause deadlocks
-
-        [Obsolete("Use ForwardToIssuerAsync instead. This sync wrapper can cause deadlocks.")]
-        public IsoMessage ForwardToIssuer(IsoMessage request, IssuerBankConfig issuerBank, string sessionId)
-        {
-            // Removed sync-over-async anti-pattern. Callers should use ForwardToIssuerAsync.
-            throw new NotSupportedException("Use ForwardToIssuerAsync instead. Sync-over-async has been removed to prevent deadlocks.");
-        }
 
         public async Task<IsoMessage> ForwardToIssuerAsync(IsoMessage request, IssuerBankConfig issuerBank, string sessionId, CancellationToken cancellationToken = default)
         {
