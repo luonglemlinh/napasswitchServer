@@ -1,0 +1,87 @@
+<?xml version="1.0" encoding="utf-8"?>
+<BinRoutingConfiguration>
+  <Banks>
+    <Bank>
+      <BankCode>TCB</BankCode>
+      <BankName>Techcombank</BankName>
+      <IssuerCode>TCB</IssuerCode>
+      <IssuerName>Techcombank</IssuerName>
+      <Host></Host>
+      <Port></Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>889988</Bin>
+        <Bin>970407</Bin>
+      </Bins>
+    </Bank>
+    <Bank>
+      <BankCode>MB</BankCode>
+      <BankName>MB Bank</BankName>
+      <IssuerCode>MB</IssuerCode>
+      <IssuerName>MB Bank</IssuerName>
+      <Host></Host>
+      <Port></Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>970422</Bin>
+      </Bins>
+    </Bank>
+    <Bank>
+      <BankCode>BIDV</BankCode>
+      <BankName>BIDV</BankName>
+      <IssuerCode>970418</IssuerCode>
+      <IssuerName>BIDV</IssuerName>
+      <Host>10.145.48.70</Host>
+      <Port>4444</Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>970418</Bin>
+      </Bins>
+    </Bank>
+    <Bank>
+      <BankCode>ACB</BankCode>
+      <BankName>Asia Commercial Bank</BankName>
+      <IssuerCode>970416</IssuerCode>
+      <IssuerName>ACB</IssuerName>
+      <Host>10.145.48.70</Host>
+      <Port>2222</Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>970416</Bin>
+      </Bins>
+    </Bank>
+    <Bank>
+      <BankCode>PGB</BankCode>
+      <BankName>PGBank</BankName>
+      <IssuerCode>970430</IssuerCode>
+      <IssuerName>PGBank</IssuerName>
+      <Host>10.145.48.70</Host>
+      <Port>3333</Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>970430</Bin>
+      </Bins>
+    </Bank>
+    <Bank>
+      <BankCode>VCB</BankCode>
+      <BankName>Vietcombank</BankName>
+      <IssuerCode>VCB</IssuerCode>
+      <IssuerName>Vietcombank</IssuerName>
+      <Host></Host>
+      <Port></Port>
+      <Timeout>30000</Timeout>
+      <Bins>
+        <Bin>686868</Bin>
+        <Bin>970436</Bin>
+      </Bins>
+    </Bank>
+  </Banks>
+  <HandleClient>
+    <Checks>
+      <Check>
+        <Condition>messageLength &lt; 12</Condition>
+        <Action>SendFormatError</Action>
+      </Check>
+    </Checks>
+  </HandleClient>
+</BinRoutingConfiguration>

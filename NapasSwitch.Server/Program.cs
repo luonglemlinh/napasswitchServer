@@ -20,8 +20,6 @@ namespace server
             if (!headless)
                 Console.Title = "NAPAS Payment Switch Server";
 
-            SwitchLogger.Initialize();
-
             Console.WriteLine(@"
 ╔════════════════════════════════════════════════════════════╗
 ║                      Switch                                ║

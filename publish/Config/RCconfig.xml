@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ResponseCodeConfiguration>
+  <Codes>
+    <Code Code="00" Description="Approved Successfully"/>
+    <Code Code="01" Description="Refer to card issuer"/>
+    <Code Code="03" Description="Invalid Merchant"/>
+    <Code Code="04" Description="Pick-up"/>
+    <Code Code="05" Description="Unable to Process"/>
+    <Code Code="12" Description="Invalid Transaction"/>
+    <Code Code="13" Description="Invalid amount"/>
+    <Code Code="14" Description="Invalid Card number"/>
+    <Code Code="15" Description="No such Issuer"/>
+    <Code Code="21" Description="Card not initialized"/>
+    <Code Code="25" Description="Unable to locate original transaction"/>
+    <Code Code="30" Description="Message Format Error"/>
+    <Code Code="34" Description="Suspected Fraud"/>
+    <Code Code="39" Description="No credit account"/>
+    <Code Code="41" Description="Lost Card"/>
+    <Code Code="43" Description="Stolen Card"/>
+    <Code Code="51" Description="Insufficient Balance"/>
+    <Code Code="54" Description="Expired Card"/>
+    <Code Code="55" Description="Incorrect PIN"/>
+    <Code Code="57" Description="Transaction not permitted to cardholder"/>
+    <Code Code="58" Description="Transaction not permitted to terminal"/>
+    <Code Code="61" Description="Exceeds withdrawal amount limit"/>
+    <Code Code="62" Description="Restricted card"/>
+    <Code Code="63" Description="Security violation"/>
+    <Code Code="65" Description="Exceeds withdrawal frequency limit"/>
+    <Code Code="68" Description="Response received too late"/>
+    <Code Code="75" Description="Allowable PIN tries exceeded"/>
+    <Code Code="76" Description="Invalid account"/>
+    <Code Code="77" Description="Reconciliation error"/>
+    <Code Code="78" Description="Blocked, first used"/>
+    <Code Code="80" Description="Credit issuer unavailable"/>
+    <Code Code="81" Description="PIN crypto error"/>
+    <Code Code="82" Description="Negative CAM or PIN verification file"/>
+    <Code Code="83" Description="Unable to verify PIN"/>
+    <Code Code="84" Description="Invalid authorization life cycle"/>
+    <Code Code="85" Description="No reason to decline"/>
+    <Code Code="86" Description="Cannot verify PIN"/>
+    <Code Code="87" Description="Purchase amount only"/>
+    <Code Code="88" Description="Crypto failure"/>
+    <Code Code="89" Description="Authentication failure"/>
+    <Code Code="91" Description="Issuer unavailable"/>
+    <Code Code="92" Description="Financial institution cannot be found for routing"/>
+    <Code Code="93" Description="Transaction cannot be completed"/>
+    <Code Code="94" Description="Duplicate transmission"/>
+    <Code Code="95" Description="Reconcile error"/>
+    <Code Code="96" Description="System malfunction"/>
+  </Codes>
+</ResponseCodeConfiguration>

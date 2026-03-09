@@ -144,19 +144,28 @@ namespace core.Configuration
                 SwitchLogger.ForContext("CONFIG").Warn("Connection string loaded from XML config file. Use NAPAS_DB_CONNECTION_STRING env variable in production.");
             }
 
-            // Load Server Configuration (Listener Ports)
+            // Load Server Configuration (Listener Ports & Logging)
             string serverConfigPath = Path.Combine(configDirectory, "ServerConfig.xml");
             if (File.Exists(serverConfigPath))
             {
                 _serverConfig = LoadXmlConfig<ServerConfiguration>(serverConfigPath);
-                SwitchLogger.ForContext("CONFIG").Info("Loaded server configuration - ISS Ports: [{IssPorts}], ACQ Ports: [{AcqPorts}]", string.Join(", ", _serverConfig.IssuerPorts), string.Join(", ", _serverConfig.AcquirerPorts));
+                
+                // Initialize Loggers with configured directory
+                SwitchLogger.Initialize(_serverConfig.Settings.LogDirectory);
+                MessageLogger.Initialize(_serverConfig.Settings.LogDirectory);
+                
+                SwitchLogger.ForContext("CONFIG").Info("Loaded server configuration - ISS Listen: [{IssPorts}], ACQ Ports: [{AcqPorts}], LogDir: {LogDir}", 
+                    string.Join(", ", _serverConfig.ISSlisteningPorts), 
+                    string.Join(", ", _serverConfig.AcquirerPorts),
+                    _serverConfig.Settings.LogDirectory);
             }
             else
             {
-                SwitchLogger.ForContext("CONFIG").Warn("ServerConfig.xml not found, using default ports");
+                SwitchLogger.Initialize("Logs"); // Fallback
+                SwitchLogger.ForContext("CONFIG").Warn("ServerConfig.xml not found, using default ports and logs");
                 _serverConfig = new ServerConfiguration 
                 { 
-                    IssuerPorts = new List<int> { 1111, 2222, 3333 },
+                    ISSlisteningPorts = new List<int> { 2222, 3333, 4444 },
                     AcquirerPorts = new List<int> { 1177 }
                 };
             }

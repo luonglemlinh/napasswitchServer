@@ -10,9 +10,13 @@ namespace core.Models.Configuration
     [XmlRoot("ServerConfiguration")]
     public class ServerConfiguration
     {
-        [XmlArray("IssuerPorts")]
+        [XmlArray("ISSlisteningPorts")]
         [XmlArrayItem("Port")]
-        public List<int> IssuerPorts { get; set; } = new();
+        public List<int> ISSlisteningPorts { get; set; } = new();
+
+        [XmlArray("ISSconnectPorts")]
+        [XmlArrayItem("Port")]
+        public List<int> ISSconnectPorts { get; set; } = new();
 
         [XmlArray("AcquirerPorts")]
         [XmlArrayItem("Port")]
@@ -30,7 +34,8 @@ namespace core.Models.Configuration
         public int[] GetAllPorts()
         {
             var allPorts = new List<int>();
-            allPorts.AddRange(IssuerPorts);
+            allPorts.AddRange(ISSlisteningPorts);
+            allPorts.AddRange(ISSconnectPorts);
             allPorts.AddRange(AcquirerPorts);
             return allPorts.ToArray();
         }
@@ -74,5 +79,8 @@ namespace core.Models.Configuration
 
         [XmlElement("HealthCheckPort")]
         public int HealthCheckPort { get; set; } = 8080;
+
+        [XmlElement("LogDirectory")]
+        public string LogDirectory { get; set; } = "Logs";
     }
 }

@@ -138,34 +138,30 @@ public class TcpSwitchServer : IDisposable
 
         foreach (var issuer in allIssuers)
         {
-            // Skip if host or port is missing
-            if (string.IsNullOrWhiteSpace(issuer.Host) || issuer.Port <= 0)
-            {
-                skipped.Add(issuer.IssuerName);
-                continue;
-            }
+            // Create the manager for every issuer
+            var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
+            manager.OnConnectionChanged += LogH2HSummary;
+            _issuerConnections[issuer.IssuerCode] = manager;
 
-            // Passive Mode Check: If the issuer's "Port" matches one of OUR listening ports,
-            // we treat it as an INBOUND connection (Passive Mode).
-            if (_ports.Contains(issuer.Port))
+            bool isPassive = _ports.Contains(issuer.Port);
+            bool isActive = !string.IsNullOrWhiteSpace(issuer.Host) && issuer.Port > 0;
+
+            if (isPassive)
             {
                 passive.Add($"{issuer.IssuerName}:{issuer.Port}");
-
-                // Map the port to this issuer so HandleClient knows who it is
                 _portToIssuerCode[issuer.Port] = issuer.IssuerCode;
-
-                // Still create the manager, but it won't dial out. It waits for AttachClient.
-                var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
-                manager.OnConnectionChanged += LogH2HSummary;
-                _issuerConnections[issuer.IssuerCode] = manager;
             }
-            else
+
+            if (isActive)
             {
-                // Active Mode: We dial out to them
+                // In hybrid mode, even if it's passive (listening), 
+                // we can also dial out if a Host is provided.
                 active.Add($"{issuer.IssuerName}->{issuer.Host}:{issuer.Port}");
-                var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
-                manager.OnConnectionChanged += LogH2HSummary;
-                _issuerConnections[issuer.IssuerCode] = manager;
+            }
+
+            if (!isPassive && !isActive)
+            {
+                skipped.Add(issuer.IssuerName);
             }
         }
 
@@ -182,10 +178,9 @@ public class TcpSwitchServer : IDisposable
     {
         Console.WriteLine("[TS-MGR] Connecting to active issuers...");
         
-        // Only connect managers that are NOT in our passive map
-        // (i.e., we are dialing out to them)
+        // Connect managers that have a Host defined (Active Mode)
         var activeIssuers = _issuerConnections
-            .Where(kvp => !_portToIssuerCode.Values.Contains(kvp.Key))
+            .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value.Config.Host) && kvp.Value.Config.Port > 0)
             .Select(kvp => kvp.Value.ConnectAllAsync());
 
         await Task.WhenAll(activeIssuers);
@@ -282,7 +277,7 @@ public class TcpSwitchServer : IDisposable
             
             // Get port configuration from ServerConfig
             var serverConfig = _config.ServerConfig;
-            var issPorts = serverConfig.IssuerPorts.Select(p => p.ToString()).ToList();
+            var issPorts = serverConfig.ISSlisteningPorts.Select(p => p.ToString()).ToList();
             var acqPorts = serverConfig.AcquirerPorts.Select(p => p.ToString()).ToList();
 
             if (issPorts.Count > 0)
@@ -500,6 +495,9 @@ public class TcpSwitchServer : IDisposable
                 txnContext.TryTransitionTo(TransactionState.Routing);
                 MessageLogger.LogMessage(sessionId, "ACQ recv", request);
 
+                // Add INBOUND log for lifecycle tracking
+                BufferLog(txnContext, "INBOUND", request.GetAcquirerID(), null, request, messageBytes);
+
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = !string.IsNullOrEmpty(clearPan) ? _securityProvider.EncryptPAN(clearPan) : null;
 
@@ -589,7 +587,7 @@ public class TcpSwitchServer : IDisposable
                 byte[] responseBytes = _parser.Build(response);
                 if (txnContext != null)
                 {
-                    BufferLog(txnContext, "OUTBOUND", response.GetAcquirerID(), response.GetIssuerID(), response, responseBytes);
+                    BufferLog(txnContext, "OUTBOUND", response.GetAcquirerID(), txnContext.IssuerCode, response, responseBytes);
                     FlushBufferedLogs(txnContext);
                 }
                 return responseBytes;
@@ -642,13 +640,14 @@ public class TcpSwitchServer : IDisposable
 
             PrepareMessageForRouting(request, issuerBank, sessionId);
 
+            txnContext.IssuerCode = issuerBank.IssuerCode;
             txnContext.TryTransitionTo(TransactionState.Routing);
 
-            BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), request.GetIssuerID(), request, _parser.Build(request));
+            BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), txnContext.IssuerCode, request, _parser.Build(request));
 
             var response = await ForwardPinTransactionAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
 
-            BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), response.GetIssuerID(), response, _parser.Build(response));
+            BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), txnContext.IssuerCode, response, _parser.Build(response));
 
             return response;
         }
@@ -879,6 +878,10 @@ public class TcpSwitchServer : IDisposable
             SwitchLogger.ForContext("ADVICE").Info("Processing {TxnType} advice (0420). Session={SessionId}, PC={PC}",
                 txnType, sessionId, processingCode ?? "N/A");
 
+            // Resolve issuer for context
+            var issuerBank = GetIssuer(request, sessionId, txnContext);
+            if (issuerBank != null) txnContext.IssuerCode = issuerBank.IssuerCode;
+
             // Per NAPAS spec 4.1.2: Respond immediately with 0430 RC=00 to ACQ
             var ackResponse = IsoResponseBuilder.CreateSuccessResponse(request);
 
@@ -895,6 +898,10 @@ public class TcpSwitchServer : IDisposable
             _ = ForwardAdviceToIssuerAsync(requestClone, sessionId, txnContext, isVoid, cancellationToken);
 
             txnContext.TryTransitionTo(TransactionState.Completed);
+
+            // 0430 response to ACQ is OUTBOUND
+            BufferLog(txnContext, "OUTBOUND", ackResponse.GetAcquirerID(), txnContext.IssuerCode, ackResponse, _parser.Build(ackResponse));
+
             return Task.FromResult(ackResponse);
         }
 
@@ -962,12 +969,13 @@ public class TcpSwitchServer : IDisposable
                     return;
                 }
 
+                txnContext.IssuerCode = issuerBank.IssuerCode;
                 PrepareMessageForRouting(request, issuerBank, sessionId);
                 TranslatePinBlockForIssuer(request, issuerBank, sessionId);
                 
-                BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), request.GetIssuerID(), request, _parser.Build(request));
+                BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), txnContext.IssuerCode, request, _parser.Build(request));
                 var issuerResponse = await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
-                BufferLog(txnContext, "RECEIVED", issuerResponse.GetAcquirerID(), issuerResponse.GetIssuerID(), issuerResponse, _parser.Build(issuerResponse));
+                BufferLog(txnContext, "RECEIVED", issuerResponse.GetAcquirerID(), txnContext.IssuerCode, issuerResponse, _parser.Build(issuerResponse));
 
                 string? rc = issuerResponse.GetField(39);
                 SwitchLogger.ForContext("ADVICE").Info(
@@ -1071,10 +1079,11 @@ public class TcpSwitchServer : IDisposable
 
             PrepareMessageForRouting(request, issuerBank, sessionId);
 
+            txnContext.IssuerCode = issuerBank.IssuerCode;
             txnContext.TryTransitionTo(TransactionState.Reversing);
-            BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), request.GetIssuerID(), request, _parser.Build(request));
+            BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), txnContext.IssuerCode, request, _parser.Build(request));
             var response = await ForwardPinTransactionAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
-            BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), response.GetIssuerID(), response, _parser.Build(response));
+            BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), txnContext.IssuerCode, response, _parser.Build(response));
 
             if (_transactionLogger != null)
             {

@@ -34,7 +34,7 @@ BEGIN
         ACQ VARCHAR(11) NULL,
         ISS VARCHAR(50) NULL,
         Direction VARCHAR(20) NOT NULL
-            CONSTRAINT CK_MessageCycle_Direction CHECK (Direction IN ('FORWARDED','RECEIVED','OUTBOUND')),
+            CONSTRAINT CK_MessageCycle_Direction CHECK (Direction IN ('INBOUND','FORWARDED','RECEIVED','OUTBOUND')),
         MessageType VARCHAR(4) NULL,
         ProcessingCode VARCHAR(6) NULL,
         Amount DECIMAL(18,2) NULL,

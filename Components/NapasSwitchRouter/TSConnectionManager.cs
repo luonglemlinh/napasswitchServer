@@ -20,6 +20,7 @@ namespace router
         private int _lastChannelIndex = -1;
         private bool _disposed;
 
+        public IssuerBankConfig Config => _tsConfig; 
         public bool IsAnyConnected => _channels.Any(c => c.IsConnected);
         public int ConnectedCount => _channels.Count(c => c.IsConnected);
         public string TSName => _tsConfig.IssuerName;

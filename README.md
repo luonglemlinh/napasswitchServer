@@ -37,9 +37,9 @@ A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8
 ┌─────────────────┐         ┌─────────────────────────────────────┐         ┌─────────────────┐
 │   Acquirer       │  TCP    │         NAPAS Switch Server         │  TCP    │     Issuer       │
 │  (ATM / POS)     ├────────►│                                     ├────────►│   (Bank Host)    │
-│                  │  :1177  │  ┌─────────┐  ┌──────────┐         │  :2222  │                  │
-│  Sends ISO 8583  │         │  │ Parser  │  │  Router  │         │  :3333  │  Approves /      │
-│  Authorization   │         │  │ (Parse  │──│ (BIN     │         │  :4444  │  Declines the    │
+│                  │  :****  │  ┌─────────┐  ┌──────────┐         │  :****  │                  │
+│  Sends ISO 8583  │         │  │ Parser  │  │  Router  │         │  :****  │  Approves /      │
+│  Authorization   │         │  │ (Parse  │──│ (BIN     │         │  :****  │  Declines the    │
 │  Request         │         │  │  & Build)│  │  Lookup) │         │         │  Transaction     │
 │                  │◄────────┤  └─────────┘  └──────────┘         │◄────────┤                  │
 │  Receives        │  TCP    │  ┌─────────┐  ┌──────────┐         │  TCP    │  Sends ISO 8583  │
@@ -47,7 +47,7 @@ A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8
 │                  │         │  │(PIN Xlat)│  │ (SQL DB) │         │         │                  │
 └─────────────────┘         │  └─────────┘  └──────────┘         │         └─────────────────┘
                             │  ┌──────────────────────┐          │
-                            │  │  Health Check :8080   │          │
+                            │  │  Health Check :****   │          │
                             │  └──────────────────────┘          │
                             └─────────────────────────────────────┘
 ```
@@ -126,7 +126,7 @@ napasswitchServer/
 ### Message Flow (Authorization — `0100`/`0110`)
 
 ```
-1. Acquirer connects to port 1177 via TCP
+1. Acquirer connects to port **** via TCP
 2. Acquirer sends ISO 8583 Authorization Request (MTI 0100)
 3. Switch parses the binary message using IsoParser
 4. Switch validates mandatory NAPAS data elements
@@ -182,27 +182,32 @@ Defines which TCP ports the server listens on and general settings.
 
 ```xml
 <ServerConfiguration>
-  <!-- Ports for Issuer (bank host) connections -->
-  <IssuerPorts>
-    <Port>2222</Port>  <!-- ACB -->
-    <Port>3333</Port>  <!-- PGB -->
-    <Port>4444</Port>  <!-- BIDV -->
-  </IssuerPorts>
+  <!-- Ports for Issuer (ISS) Listener — inbound connections -->
+  <ISSlisteningPorts>
+    <Port>****</Port>
+    <Port>****</Port>
+    <Port>****</Port>
+  </ISSlisteningPorts>
+
+  <!-- Ports for Issuer (ISS) Outbound — active connections (Phase 8+) -->
+  <ISSconnectPorts>
+    <!-- Ports will be added here -->
+  </ISSconnectPorts>
 
   <!-- Ports for Acquirer (ATM/POS) connections -->
   <AcquirerPorts>
-    <Port>1177</Port>  <!-- Primary ACQ port -->
+    <Port>****</Port>  <!-- Primary ACQ port -->
   </AcquirerPorts>
 
   <Settings>
     <MaxConcurrentConnections>1000</MaxConcurrentConnections>
     <ConnectionTimeout>300000</ConnectionTimeout>  <!-- 5 min in ms -->
-    <HealthCheckPort>8080</HealthCheckPort>
+    <HealthCheckPort>****</HealthCheckPort>
   </Settings>
 
   <!-- Default values for mandatory NAPAS data elements -->
   <Defaults>
-    <DefaultAcquirerId>970418</DefaultAcquirerId>
+    <DefaultAcquirerId>****</DefaultAcquirerId>
     <DefaultCurrencyCode>704</DefaultCurrencyCode>  <!-- VND -->
     <!-- ... other defaults ... -->
   </Defaults>
@@ -221,15 +226,15 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
 <BinRoutingConfiguration>
   <Banks>
     <Bank>
-      <BankCode>ACB</BankCode>           <!-- Short code (internal) -->
-      <BankName>Asia Commercial Bank</BankName>
-      <IssuerCode>970416</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
-      <IssuerName>ACB</IssuerName>
-      <Host>10.145.48.70</Host>          <!-- Issuer's IP address -->
-      <Port>2222</Port>                  <!-- Issuer's TCP port -->
+      <BankCode>****</BankCode>           <!-- Short code (internal) -->
+      <BankName>****</BankName>
+      <IssuerCode>****</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
+      <IssuerName>****</IssuerName>
+      <Host>****</Host>          <!-- Issuer's IP address -->
+      <Port>****</Port>                  <!-- Issuer's TCP port -->
       <Timeout>30000</Timeout>           <!-- Connection timeout (ms) -->
       <Bins>
-        <Bin>970416</Bin>                <!-- Card BIN(s) that route here -->
+        <Bin>****</Bin>                <!-- Card BIN(s) that route here -->
       </Bins>
     </Bank>
     <!-- Add more banks... -->
@@ -259,8 +264,8 @@ Maps Acquirer institution codes to their names. Used for logging and identificat
 <AcquirerRoutingConfiguration>
   <Acquirers>
     <Acquirer>
-      <AcquirerCode>970416</AcquirerCode>
-      <AcquirerID>ACB</AcquirerID>
+      <AcquirerCode>****</AcquirerCode>
+      <AcquirerID>****</AcquirerID>
     </Acquirer>
     <!-- Add more acquirers... -->
   </Acquirers>
@@ -358,14 +363,14 @@ The script is **idempotent** — it can be run multiple times safely. It will:
 ### Example (Linux / Azure VM)
 
 ```bash
-export NAPAS_DB_CONNECTION_STRING='Server=tcp:myserver.database.windows.net,1433;Initial Catalog=NAPASSwitch;User ID=admin;Password=MyPass123;Encrypt=True;TrustServerCertificate=False;'
+export NAPAS_DB_CONNECTION_STRING='Server=tcp:****.database.windows.net,1433;Initial Catalog=****;User ID=****;Password=****;Encrypt=True;TrustServerCertificate=False;'
 export ALLOW_HSM_STUB=true
 ```
 
 ### Example (Windows PowerShell)
 
 ```powershell
-$env:NAPAS_DB_CONNECTION_STRING = "Server=localhost;Database=NAPASSwitch;Integrated Security=true;TrustServerCertificate=true;"
+$env:NAPAS_DB_CONNECTION_STRING = "Server=localhost;Database=****;Integrated Security=true;TrustServerCertificate=true;"
 $env:ALLOW_HSM_STUB = "true"
 ```
 
@@ -470,9 +475,9 @@ The server exposes an HTTP health check endpoint on the port defined in `ServerC
     "connected": 2,
     "total": 3,
     "details": {
-      "970416": { "connected": true },
-      "970430": { "connected": true },
-      "970418": { "connected": false }
+      "****": { "connected": true },
+      "****": { "connected": true },
+      "****": { "connected": false }
     }
   }
 }
@@ -499,7 +504,7 @@ The test suite covers:
 
 Connect a test client (e.g., a "blackbox" simulator) to the Acquirer port:
 - **Host**: Your server's IP address (or `localhost` if running locally)
-- **Port**: `1177` (default Acquirer port)
+- **Port**: `****` (default Acquirer port)
 - **Protocol**: Raw TCP with 4-byte ASCII length header + ISO 8583 binary payload
 
 ---
@@ -535,8 +540,3 @@ Card numbers (PAN) are encrypted before being stored in the database using the H
 
 Database connection strings must be provided via environment variables, not stored in XML config files. This follows PCI-DSS requirements for protecting sensitive credentials.
 
----
-
-## License
-
-This project is for educational and testing purposes.

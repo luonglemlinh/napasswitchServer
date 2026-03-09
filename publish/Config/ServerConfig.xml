@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ServerConfiguration>
+  <!-- 
+    TCP Listener Ports Configuration
+    The server will listen on all ports defined below for incoming connections
+  -->
+  
+  <!-- Issuer (ISS) Listener Ports - for connections FROM issuers -->
+  <ISSlisteningPorts>
+    <Port>2222</Port>  <!-- (Currently ACB) -->
+    <Port>3333</Port>  <!-- (Currently PGB) -->
+    <Port>4444</Port>  <!-- (Currently BIDV) -->
+  </ISSlisteningPorts>
+
+  <!-- Issuer (ISS) outbound Ports - for connections TO issuers -->
+  <ISSconnectPorts>
+    <!-- Placeholder for ports to be implemented shortly -->
+  </ISSconnectPorts>
+  
+  <!-- Acquirer (ACQ) Listener Ports - for connections FROM acquirers -->
+  <AcquirerPorts>
+    <Port>1177</Port>  <!-- ACQ Primary Port -->
+  </AcquirerPorts>
+  
+  <!-- Server Settings -->
+  <Settings>
+    <MaxConcurrentConnections>1000</MaxConcurrentConnections>
+    <ConnectionTimeout>300000</ConnectionTimeout> <!-- 5 minutes in ms -->
+    <HealthCheckPort>8080</HealthCheckPort> <!-- HTTP health-check for load balancers -->
+  </Settings>
+  
+  <!-- Default field values for mandatory NAPAS data elements -->
+  <Defaults>
+    <DefaultAcquirerId>970418</DefaultAcquirerId>
+    <DefaultMerchantId>NAPAS_MERCHT_01</DefaultMerchantId>
+    <DefaultMerchantName>NAPAS TEST MERCHANT       HANOI        VN</DefaultMerchantName>
+    <DefaultMerchantCategoryCode>6011</DefaultMerchantCategoryCode>
+    <DefaultPOSEntryMode>011</DefaultPOSEntryMode>
+    <DefaultPOSConditionCode>00</DefaultPOSConditionCode>
+    <DefaultCurrencyCode>704</DefaultCurrencyCode>
+  </Defaults>
+</ServerConfiguration>

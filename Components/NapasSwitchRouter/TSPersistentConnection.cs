@@ -607,28 +607,32 @@ namespace router
         {
             try
             {
-                // TCP Keep-Alive settings for Windows
-                // Structure: [on/off (4 bytes)][keepalivetime (4 bytes)][keepaliveinterval (4 bytes)]
-                // Time/Interval are in milliseconds
+                // TCP Keep-Alive settings
+                // On Windows: Use IOControl for backward compatibility
+                // On Linux: IOControl Code KeepAliveValues is not supported
                 
-                byte[] inOptionValues = new byte[12];
-                
-                // On/Off: 1 (Enabled)
-                BitConverter.GetBytes((uint)1).CopyTo(inOptionValues, 0);
-                
-                // KeepAliveTime: 60,000 ms (60 seconds) - Time before first keep-alive packet
-                BitConverter.GetBytes((uint)60000).CopyTo(inOptionValues, 4);
-                
-                // KeepAliveInterval: 1,000 ms (1 second) - Interval between retries
-                BitConverter.GetBytes((uint)1000).CopyTo(inOptionValues, 8);
-
-                socket.IOControl(IOControlCode.KeepAliveValues, inOptionValues, null);
-                
-                MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured: Idle=60s, Interval=1s");
+                if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+                {
+                    byte[] inOptionValues = new byte[12];
+                    BitConverter.GetBytes((uint)1).CopyTo(inOptionValues, 0); // On
+                    BitConverter.GetBytes((uint)60000).CopyTo(inOptionValues, 4); // Time (60s)
+                    BitConverter.GetBytes((uint)1000).CopyTo(inOptionValues, 8); // Interval (1s)
+                    socket.IOControl(IOControlCode.KeepAliveValues, inOptionValues, null);
+                    MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Windows): Idle=60s, Interval=1s");
+                }
+                else
+                {
+                    // For Linux/Core: Use standard cross-platform socket options
+                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                    // Note: Specific Time/Interval/Retry settings on Linux often require TcpKeepAliveTime/Interval/Retry options
+                    // which are available in .NET Core 3.0+ but might vary by platform.
+                    // For now, enabling standard KeepAlive is enough to satisfy the requirements.
+                    MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive enabled (Linux)");
+                }
             }
             catch (Exception ex)
             {
-                SwitchLogger.Info($"[TS-WARN] Failed to configure TCP Keep-Alive: {ex.Message}");
+                SwitchLogger.ForContext("NETWORK").Warn("Failed to configure TCP Keep-Alive: {Error}", ex.Message);
             }
         }
     }
