@@ -12,3 +12,5 @@ hsm_stub_keys.json
 
 # Publish folders
 [Pp]ublish/
+test_client.py
+__pycache__/

@@ -21,9 +21,10 @@ END
 
 -- ============================================================
 -- 1. Create the MessageCycle table
---    Tracks each leg of the message cycle (FORWARDED, RECEIVED, OUTBOUND)
---    ACQ  = F32 Acquiring Institution ID
---    ISS  = F33 Forwarding/Issuing Institution ID
+--    Tracks each leg of the message cycle (INBOUND, FORWARDED, RECEIVED, OUTBOUND)
+--    ACQ    = DE#32 Acquiring Institution ID
+--    ISS    = First 6 digits of PAN (card BIN)
+--    Sender = 'ACQ' or 'ISS' — who originated this message leg
 -- ============================================================
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='MessageCycle' and xtype='U')
 BEGIN
@@ -31,6 +32,8 @@ BEGIN
         Id BIGINT PRIMARY KEY IDENTITY(1,1),
         TransactionId VARCHAR(128) NOT NULL,
         SessionId VARCHAR(20) NOT NULL,
+        Sender VARCHAR(3) NULL
+            CONSTRAINT CK_MessageCycle_Sender CHECK (Sender IN ('ACQ', 'ISS')),
         ACQ VARCHAR(11) NULL,
         ISS VARCHAR(50) NULL,
         Direction VARCHAR(20) NOT NULL
@@ -83,7 +86,57 @@ BEGIN
         ALTER TABLE MessageCycle ADD ResponseCode VARCHAR(3) NULL;
         PRINT '  + Added ResponseCode column to MessageCycle';
     END
+
+    -- Phase 5 migration: Ensure CK_MessageCycle_Direction includes INBOUND
+    -- Older databases may have a constraint that only allows (FORWARDED, RECEIVED, OUTBOUND)
+    IF EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_MessageCycle_Direction')
+    BEGIN
+        ALTER TABLE MessageCycle DROP CONSTRAINT CK_MessageCycle_Direction;
+        ALTER TABLE MessageCycle ADD CONSTRAINT CK_MessageCycle_Direction
+            CHECK (Direction IN ('INBOUND','FORWARDED','RECEIVED','OUTBOUND'));
+        PRINT '  + Recreated CK_MessageCycle_Direction with INBOUND support';
+    END
+
+    -- Phase 6 migration: Add Sender column
+    IF NOT EXISTS (
+        SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'Sender'
+    )
+    BEGIN
+        ALTER TABLE MessageCycle
+            ADD Sender VARCHAR(3) NULL
+                CONSTRAINT CK_MessageCycle_Sender CHECK (Sender IN ('ACQ', 'ISS'));
+        PRINT '  + Added Sender column to MessageCycle';
+    END
 END
+
+-- ============================================================
+-- 1b. Canonical view: MessageCycle column order + ALL CAPS headers
+--     Requested order:
+--     ID, TRANSACTIONID, ACQ, ISS, SENDER, DIRECTION, MESSAGETYPE,
+--     PROCESSINGCODE, AMOUNT, STAN, RRN, LOGTIME, RC, SESSIONID, RAWMESSAGE
+-- ============================================================
+GO
+CREATE OR ALTER VIEW dbo.vw_MessageCycle
+AS
+    SELECT
+        Id            AS [ID],
+        TransactionId AS [TRANSACTIONID],
+        ACQ           AS [ACQ],
+        ISS           AS [ISS],
+        Sender        AS [SENDER],
+        Direction     AS [DIRECTION],
+        MessageType   AS [MESSAGETYPE],
+        ProcessingCode AS [PROCESSINGCODE],
+        Amount        AS [AMOUNT],
+        STAN          AS [STAN],
+        RRN           AS [RRN],
+        LogTime       AS [LOGTIME],
+        ResponseCode  AS [RC],
+        SessionId     AS [SESSIONID],
+        RawMessage    AS [RAWMESSAGE]
+    FROM dbo.MessageCycle;
+GO
 
 -- ============================================================
 -- 2. Create the TransactionLog table
