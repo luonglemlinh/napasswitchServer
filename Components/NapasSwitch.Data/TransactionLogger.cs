@@ -135,56 +135,56 @@ namespace data
         private async Task LogTransactionToDbAsync(SqlConnection connection, IsoMessage request, IsoMessage response, string transactionId, string sessionId, string? currencyCode, string? posEntryMode, string? settlementDate, string? originalTransactionId)
         {
             string upsertQuery = @"
-                IF EXISTS (SELECT 1 FROM TransactionLog WHERE TransactionId = @TransactionId)
+                IF EXISTS (SELECT 1 FROM TransactionLog WHERE TRANSACTIONID = @TRANSACTIONID)
                 BEGIN
                     UPDATE TransactionLog SET
-                        ResponseCode = @ResponseCode,
-                        AuthorizationCode = @AuthorizationCode,
+                        RESPONSECODE = @RESPONSECODE,
+                        AUTHORIZATIONCODE = @AUTHORIZATIONCODE,
                         RRN = COALESCE(RRN, @RRN),
-                        CurrencyCode = COALESCE(CurrencyCode, @CurrencyCode),
-                        POSEntryMode = COALESCE(POSEntryMode, @POSEntryMode),
-                        Status = 'MATCHED'
-                    WHERE TransactionId = @TransactionId;
+                        CURRENCYCODE = COALESCE(CURRENCYCODE, @CURRENCYCODE),
+                        POSENTRYMODE = COALESCE(POSENTRYMODE, @POSENTRYMODE),
+                        STATUS = 'MATCHED'
+                    WHERE TRANSACTIONID = @TRANSACTIONID;
                 END
                 ELSE
                 BEGIN
                     INSERT INTO TransactionLog (
-                        TransactionId, SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
-                        AcquirerID, IssuerID, ResponseCode, TerminalID, MerchantID,
-                        TransactionTime, TransactionType, RRN, TRN, AuthorizationCode, Status,
-                        CurrencyCode, POSEntryMode, SettlementDate, OriginalTransactionId
+                        TRANSACTIONID, SESSIONID, MESSAGETYPE, PAN, PROCESSINGCODE, AMOUNT, STAN, 
+                        ACQUIRERID, ISSUERID, RESPONSECODE, TERMINALID, MERCHANTID,
+                        TRANSACTIONTIME, TRANSACTIONTYPE, RRN, TRN, AUTHORIZATIONCODE, STATUS,
+                        CURRENCYCODE, POSENTRYMODE, SETTLEMENTDATE, ORIGINALTRANSACTIONID
                     ) VALUES (
-                        @TransactionId, @SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
-                        @AcquirerID, @IssuerID, @ResponseCode, @TerminalID, @MerchantID,
-                        GETUTCDATE(), @TransactionType, @RRN, @TRN, @AuthorizationCode, 'MATCHED',
-                        @CurrencyCode, @POSEntryMode, @SettlementDate, @OriginalTransactionId
+                        @TRANSACTIONID, @SESSIONID, @MESSAGETYPE, @PAN, @PROCESSINGCODE, @AMOUNT, @STAN,
+                        @ACQUIRERID, @ISSUERID, @RESPONSECODE, @TERMINALID, @MERCHANTID,
+                        GETUTCDATE(), @TRANSACTIONTYPE, @RRN, @TRN, @AUTHORIZATIONCODE, 'MATCHED',
+                        @CURRENCYCODE, @POSENTRYMODE, @SETTLEMENTDATE, @ORIGINALTRANSACTIONID
                     );
                 END";
 
             using (var command = new SqlCommand(upsertQuery, connection))
             {
-                command.Parameters.AddWithValue("@TransactionId", transactionId);
-                command.Parameters.AddWithValue("@SessionId", sessionId);
-                command.Parameters.AddWithValue("@MessageType", request.MessageType);
+                command.Parameters.AddWithValue("@TRANSACTIONID", transactionId);
+                command.Parameters.AddWithValue("@SESSIONID", sessionId);
+                command.Parameters.AddWithValue("@MESSAGETYPE", request.MessageType);
                 command.Parameters.AddWithValue("@PAN", (object?)EncryptPanForStorage(request.GetPAN()) ?? DBNull.Value);
-                command.Parameters.AddWithValue("@ProcessingCode", (object?)request.GetProcessingCode() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@Amount", ParseAmount(request.GetAmount()));
+                command.Parameters.AddWithValue("@PROCESSINGCODE", (object?)request.GetProcessingCode() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@AMOUNT", ParseAmount(request.GetAmount()));
                 command.Parameters.AddWithValue("@STAN", (object?)request.GetSTAN() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@AcquirerID", (object?)request.GetAcquirerID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@IssuerID", (object?)GetBestIssuerID(request, response) ?? DBNull.Value);
-                command.Parameters.AddWithValue("@ResponseCode", (object?)response.GetResponseCode() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@TransactionType",
+                command.Parameters.AddWithValue("@ACQUIRERID", (object?)request.GetAcquirerID() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@ISSUERID", (object?)GetBestIssuerID(request, response) ?? DBNull.Value);
+                command.Parameters.AddWithValue("@RESPONSECODE", (object?)response.GetResponseCode() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@TERMINALID", (object?)request.GetTerminalID() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@MERCHANTID", (object?)request.GetMerchantID() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@TRANSACTIONTYPE",
                     TransactionTypeHelper.GetTransactionType(request.MessageType, request.GetProcessingCode()));
                 command.Parameters.AddWithValue("@RRN", (object?)request.GetField(37) ?? (object?)response.GetField(37) ?? DBNull.Value);
                 command.Parameters.AddWithValue("@TRN", (object?)request.GetTRN() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@AuthorizationCode", (object?)response.GetField(38) ?? DBNull.Value);
+                command.Parameters.AddWithValue("@AUTHORIZATIONCODE", (object?)response.GetField(38) ?? DBNull.Value);
                 
-                command.Parameters.AddWithValue("@CurrencyCode", (object?)currencyCode ?? DBNull.Value);
-                command.Parameters.AddWithValue("@POSEntryMode", (object?)posEntryMode ?? DBNull.Value);
-                command.Parameters.AddWithValue("@SettlementDate", string.IsNullOrEmpty(settlementDate) ? (object)DBNull.Value : settlementDate);
-                command.Parameters.AddWithValue("@OriginalTransactionId", (object?)originalTransactionId ?? DBNull.Value);
+                command.Parameters.AddWithValue("@CURRENCYCODE", (object?)currencyCode ?? DBNull.Value);
+                command.Parameters.AddWithValue("@POSENTRYMODE", (object?)posEntryMode ?? DBNull.Value);
+                command.Parameters.AddWithValue("@SETTLEMENTDATE", string.IsNullOrEmpty(settlementDate) ? (object)DBNull.Value : settlementDate);
+                command.Parameters.AddWithValue("@ORIGINALTRANSACTIONID", (object?)originalTransactionId ?? DBNull.Value);
 
                 await command.ExecuteNonQueryAsync();
             }
@@ -201,41 +201,41 @@ namespace data
         {
             string query = @"
                 INSERT INTO TransactionLog (
-                    TransactionId, SessionId, MessageType, PAN, ProcessingCode, Amount, STAN, 
-                    AcquirerID, IssuerID, TerminalID, MerchantID,
-                    TransactionTime, TransactionType, RRN, TRN, Status, ExpiresAt, RequestMessageBytes,
-                    CurrencyCode, POSEntryMode, SettlementDate, OriginalTransactionId
+                    TRANSACTIONID, SESSIONID, MESSAGETYPE, PAN, PROCESSINGCODE, AMOUNT, STAN, 
+                    ACQUIRERID, ISSUERID, TERMINALID, MERCHANTID,
+                    TRANSACTIONTIME, TRANSACTIONTYPE, RRN, TRN, STATUS, EXPIRESAT, REQUESTMESSAGEBYTES,
+                    CURRENCYCODE, POSENTRYMODE, SETTLEMENTDATE, ORIGINALTRANSACTIONID
                 ) VALUES (
-                    @TransactionId, @SessionId, @MessageType, @PAN, @ProcessingCode, @Amount, @STAN,
-                    @AcquirerID, @IssuerID, @TerminalID, @MerchantID,
-                    GETUTCDATE(), @TransactionType, @RRN, @TRN, 'PENDING', 
-                    DATEADD(MINUTE, @Expiry, GETUTCDATE()), @MessageBytes,
-                    @CurrencyCode, @POSEntryMode, @SettlementDate, @OriginalTransactionId)";
+                    @TRANSACTIONID, @SESSIONID, @MESSAGETYPE, @PAN, @PROCESSINGCODE, @AMOUNT, @STAN,
+                    @ACQUIRERID, @ISSUERID, @TERMINALID, @MERCHANTID,
+                    GETUTCDATE(), @TRANSACTIONTYPE, @RRN, @TRN, 'PENDING', 
+                    DATEADD(MINUTE, @EXPIRY, GETUTCDATE()), @MESSAGEBYTES,
+                    @CURRENCYCODE, @POSENTRYMODE, @SETTLEMENTDATE, @ORIGINALTRANSACTIONID)";
 
             using (var command = new SqlCommand(query, connection))
             {
-                command.Parameters.AddWithValue("@TransactionId", transactionId);
-                command.Parameters.AddWithValue("@SessionId", sessionId);
-                command.Parameters.AddWithValue("@MessageType", request.MessageType);
+                command.Parameters.AddWithValue("@TRANSACTIONID", transactionId);
+                command.Parameters.AddWithValue("@SESSIONID", sessionId);
+                command.Parameters.AddWithValue("@MESSAGETYPE", request.MessageType);
                 command.Parameters.AddWithValue("@PAN", (object?)EncryptPanForStorage(request.GetPAN()) ?? DBNull.Value);
-                command.Parameters.AddWithValue("@ProcessingCode", (object?)request.GetProcessingCode() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@Amount", ParseAmount(request.GetAmount()));
+                command.Parameters.AddWithValue("@PROCESSINGCODE", (object?)request.GetProcessingCode() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@AMOUNT", ParseAmount(request.GetAmount()));
                 command.Parameters.AddWithValue("@STAN", (object?)request.GetSTAN() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@AcquirerID", (object?)request.GetAcquirerID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@IssuerID", (object?)GetBestIssuerID(request, null) ?? DBNull.Value);
-                command.Parameters.AddWithValue("@TerminalID", (object?)request.GetTerminalID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@MerchantID", (object?)request.GetMerchantID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@TransactionType",
+                command.Parameters.AddWithValue("@ACQUIRERID", (object?)request.GetAcquirerID() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@ISSUERID", (object?)GetBestIssuerID(request, null) ?? DBNull.Value);
+                command.Parameters.AddWithValue("@TERMINALID", (object?)request.GetTerminalID() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@MERCHANTID", (object?)request.GetMerchantID() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@TRANSACTIONTYPE",
                     TransactionTypeHelper.GetTransactionType(request.MessageType, request.GetProcessingCode()));
                 command.Parameters.AddWithValue("@RRN", (object?)request.GetField(37) ?? DBNull.Value);
                 command.Parameters.AddWithValue("@TRN", (object?)request.GetTRN() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@Expiry", expirationMinutes);
-                command.Parameters.AddWithValue("@MessageBytes", messageBytes);
+                command.Parameters.AddWithValue("@EXPIRY", expirationMinutes);
+                command.Parameters.AddWithValue("@MESSAGEBYTES", messageBytes);
                 
-                command.Parameters.AddWithValue("@CurrencyCode", (object?)currencyCode ?? DBNull.Value);
-                command.Parameters.AddWithValue("@POSEntryMode", (object?)posEntryMode ?? DBNull.Value);
-                command.Parameters.AddWithValue("@SettlementDate", string.IsNullOrEmpty(settlementDate) ? (object)DBNull.Value : settlementDate);
-                command.Parameters.AddWithValue("@OriginalTransactionId", (object?)originalTransactionId ?? DBNull.Value);
+                command.Parameters.AddWithValue("@CURRENCYCODE", (object?)currencyCode ?? DBNull.Value);
+                command.Parameters.AddWithValue("@POSENTRYMODE", (object?)posEntryMode ?? DBNull.Value);
+                command.Parameters.AddWithValue("@SETTLEMENTDATE", string.IsNullOrEmpty(settlementDate) ? (object)DBNull.Value : settlementDate);
+                command.Parameters.AddWithValue("@ORIGINALTRANSACTIONID", (object?)originalTransactionId ?? DBNull.Value);
 
                 await command.ExecuteNonQueryAsync();
             }
@@ -273,17 +273,17 @@ namespace data
         {
             string query = @"
                 UPDATE TransactionLog SET 
-                    Status = @Status, 
-                    ErrorReason = COALESCE(@ErrorReason, ErrorReason),
-                    ResponseCode = COALESCE(@ResponseCode, ResponseCode)
-                WHERE TransactionId = @TransactionId";
+                    STATUS = @STATUS, 
+                    ERRORREASON = COALESCE(@ERRORREASON, ERRORREASON),
+                    RESPONSECODE = COALESCE(@RESPONSECODE, RESPONSECODE)
+                WHERE TRANSACTIONID = @TRANSACTIONID";
 
             using (var command = new SqlCommand(query, connection))
             {
-                command.Parameters.AddWithValue("@TransactionId", transactionId);
-                command.Parameters.AddWithValue("@Status", status);
-                command.Parameters.AddWithValue("@ErrorReason", (object?)errorReason ?? DBNull.Value);
-                command.Parameters.AddWithValue("@ResponseCode", (object?)responseCode ?? DBNull.Value);
+                command.Parameters.AddWithValue("@TRANSACTIONID", transactionId);
+                command.Parameters.AddWithValue("@STATUS", status);
+                command.Parameters.AddWithValue("@ERRORREASON", (object?)errorReason ?? DBNull.Value);
+                command.Parameters.AddWithValue("@RESPONSECODE", (object?)responseCode ?? DBNull.Value);
                 await command.ExecuteNonQueryAsync();
             }
         }
@@ -296,11 +296,11 @@ namespace data
             using var command = new SqlCommand(@"
                 SELECT COUNT(*) FROM TransactionLog 
                 WHERE STAN = @STAN 
-                  AND AcquirerID = @AcquirerID 
-                  AND Status IN ('PENDING', 'MATCHED')", connection);
+                  AND ACQUIRERID = @ACQUIRERID 
+                  AND STATUS IN ('PENDING', 'MATCHED')", connection);
 
             command.Parameters.AddWithValue("@STAN", stan);
-            command.Parameters.AddWithValue("@AcquirerID", acquirerId ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@ACQUIRERID", acquirerId ?? (object)DBNull.Value);
             // In a real system we'd also check the date field if present in the message or use TransactionTime range
 
             var result = await command.ExecuteScalarAsync();
@@ -312,21 +312,21 @@ namespace data
             using var connection = new SqlConnection(_connectionString);
             await connection.OpenAsync();
 
-            string whereClause = !string.IsNullOrEmpty(trn) ? "TRN = @Param" : "STAN = @Param AND AcquirerID = @Acq";
+            string whereClause = !string.IsNullOrEmpty(trn) ? "TRN = @PARAM" : "STAN = @PARAM AND ACQUIRERID = @ACQ";
             
             using var command = new SqlCommand($@"
-                SELECT RequestMessageBytes, TransactionId FROM TransactionLog 
-                WHERE {whereClause} AND Status = 'MATCHED'
-                ORDER BY Id DESC", connection);
+                SELECT REQUESTMESSAGEBYTES, TRANSACTIONID FROM TransactionLog 
+                WHERE {whereClause} AND STATUS = 'MATCHED'
+                ORDER BY ID DESC", connection);
 
-            command.Parameters.AddWithValue("@Param", trn ?? stan);
-            if (string.IsNullOrEmpty(trn)) command.Parameters.AddWithValue("@Acq", acquirerId ?? (object)DBNull.Value);
+            command.Parameters.AddWithValue("@PARAM", trn ?? stan);
+            if (string.IsNullOrEmpty(trn)) command.Parameters.AddWithValue("@ACQ", acquirerId ?? (object)DBNull.Value);
 
             using var reader = await command.ExecuteReaderAsync();
             if (!await reader.ReadAsync()) return null;
 
-            var bytes = reader["RequestMessageBytes"] as byte[];
-            var originalTxnId = reader["TransactionId"]?.ToString();
+            var bytes = reader["REQUESTMESSAGEBYTES"] as byte[];
+            var originalTxnId = reader["TRANSACTIONID"]?.ToString();
 
             if (bytes == null || string.IsNullOrEmpty(originalTxnId)) return null;
 

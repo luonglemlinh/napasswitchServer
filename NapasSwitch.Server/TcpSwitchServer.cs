@@ -496,7 +496,7 @@ public class TcpSwitchServer : IDisposable
                 MessageLogger.LogMessage(sessionId, "ACQ recv", request);
 
                 // Add INBOUND log for lifecycle tracking
-                BufferLog(txnContext, "INBOUND", request.GetAcquirerID(), null, request, messageBytes);
+                BufferLog(txnContext, "INBOUND", request, messageBytes);
 
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = !string.IsNullOrEmpty(clearPan) ? _securityProvider.EncryptPAN(clearPan) : null;
@@ -587,7 +587,7 @@ public class TcpSwitchServer : IDisposable
                 byte[] responseBytes = _parser.Build(response);
                 if (txnContext != null)
                 {
-                    BufferLog(txnContext, "OUTBOUND", response.GetAcquirerID(), txnContext.IssuerCode, response, responseBytes);
+                    BufferLog(txnContext, "OUTBOUND", response, responseBytes);
                     FlushBufferedLogs(txnContext);
                 }
                 return responseBytes;
@@ -643,11 +643,11 @@ public class TcpSwitchServer : IDisposable
             txnContext.IssuerCode = issuerBank.IssuerCode;
             txnContext.TryTransitionTo(TransactionState.Routing);
 
-            BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), txnContext.IssuerCode, request, _parser.Build(request));
+            BufferLog(txnContext, "FORWARDED", request, _parser.Build(request));
 
             var response = await ForwardPinTransactionAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
 
-            BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), txnContext.IssuerCode, response, _parser.Build(response));
+            BufferLog(txnContext, "RECEIVED", response, _parser.Build(response));
 
             return response;
         }
@@ -776,29 +776,31 @@ public class TcpSwitchServer : IDisposable
             return response;
         }
 
-        private void BufferLog(TransactionContext? ctx, string direction, string? acq, string? iss, IsoMessage? msg, byte[]? bytes)
+        private void BufferLog(TransactionContext? ctx, string direction, IsoMessage? msg, byte[]? bytes)
         {
             if (ctx == null || _messageCycleStore == null || bytes == null) return;
 
+            bool isResponse = msg != null && MtiHelper.IsResponse(msg.MessageType);
+            string sender = (msg != null && msg.HasField(39) && isResponse) ? "ISS" : "ACQ";
+
             decimal? amount = null;
             if (decimal.TryParse(msg?.GetField(4) ?? "0", out decimal parsedAmount))
-            {
                 amount = parsedAmount / 100m;
-            }
 
             ctx.BufferedLogs.Add(new BufferedLogEntry
             {
-                Direction = direction,
-                ACQ = acq,
-                ISS = iss,
-                MessageType = msg?.MessageType ?? "Unknown",
-                ProcessingCode = msg?.GetField(3),
-                Amount = amount,
+                DIRECTION = direction,
+                SENDER = sender,
+                ACQ = msg?.GetField(32),
+                ISS = msg?.GetCardBIN(),
+                MESSAGETYPE = msg?.MessageType ?? "Unknown",
+                PROCESSINGCODE = msg?.GetField(3),
+                AMOUNT = amount,
                 STAN = msg?.GetField(11),
                 RRN = msg?.GetField(37),
-                ResponseCode = msg?.GetField(39),
-                RawMessage = _messageCycleStore.BuildSanitizedRawMessageHex(msg, bytes),
-                LogTime = DateTime.UtcNow
+                RC = msg?.GetField(39),
+                RAWMESSAGE = _messageCycleStore.BuildSanitizedRawMessageHex(msg, bytes),
+                LOGTIME = DateTime.UtcNow
             });
         }
 
@@ -900,7 +902,7 @@ public class TcpSwitchServer : IDisposable
             txnContext.TryTransitionTo(TransactionState.Completed);
 
             // 0430 response to ACQ is OUTBOUND
-            BufferLog(txnContext, "OUTBOUND", ackResponse.GetAcquirerID(), txnContext.IssuerCode, ackResponse, _parser.Build(ackResponse));
+            BufferLog(txnContext, "OUTBOUND", ackResponse, _parser.Build(ackResponse));
 
             return Task.FromResult(ackResponse);
         }
@@ -973,9 +975,9 @@ public class TcpSwitchServer : IDisposable
                 PrepareMessageForRouting(request, issuerBank, sessionId);
                 TranslatePinBlockForIssuer(request, issuerBank, sessionId);
                 
-                BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), txnContext.IssuerCode, request, _parser.Build(request));
+                BufferLog(txnContext, "FORWARDED", request, _parser.Build(request));
                 var issuerResponse = await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
-                BufferLog(txnContext, "RECEIVED", issuerResponse.GetAcquirerID(), txnContext.IssuerCode, issuerResponse, _parser.Build(issuerResponse));
+                BufferLog(txnContext, "RECEIVED", issuerResponse, _parser.Build(issuerResponse));
 
                 string? rc = issuerResponse.GetField(39);
                 SwitchLogger.ForContext("ADVICE").Info(
@@ -1081,9 +1083,9 @@ public class TcpSwitchServer : IDisposable
 
             txnContext.IssuerCode = issuerBank.IssuerCode;
             txnContext.TryTransitionTo(TransactionState.Reversing);
-            BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), txnContext.IssuerCode, request, _parser.Build(request));
+            BufferLog(txnContext, "FORWARDED", request, _parser.Build(request));
             var response = await ForwardPinTransactionAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
-            BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), txnContext.IssuerCode, response, _parser.Build(response));
+            BufferLog(txnContext, "RECEIVED", response, _parser.Build(response));
 
             if (_transactionLogger != null)
             {
