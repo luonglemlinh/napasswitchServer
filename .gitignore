@@ -9,3 +9,6 @@ Logs/
 
 # Security: never commit keys or connection strings
 hsm_stub_keys.json
+
+# Publish folders
+[Pp]ublish/
