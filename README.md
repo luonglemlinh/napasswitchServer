@@ -1,6 +1,8 @@
 # NAPAS Payment Switch Server
 
-A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8.0. This server acts as an intermediary between **Acquirer** institutions (ATMs, POS terminals) and **Issuer** banks, routing authorization requests, reversals, and network management messages in real time over raw TCP sockets.
+A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8.0. This server acts as an intermediary between **Acquirer** institutions (ATMs, POS terminals) and **Issuer** banks, routing authorization requests, reversals, and network management messages in real time over raw TCP sockets. 
+
+**Transaction types supported: Retail(Purchase), Balance Inquiry, Void/Reversal**
 
 > **Disclaimer**: This is a testing/simulation environment. It is not affiliated with or endorsed by the real NAPAS (National Payment Corporation of Vietnam).
 
@@ -37,9 +39,9 @@ A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8
 ┌─────────────────┐         ┌─────────────────────────────────────┐         ┌─────────────────┐
 │   Acquirer       │  TCP    │         NAPAS Switch Server         │  TCP    │     Issuer       │
 │  (ATM / POS)     ├────────►│                                     ├────────►│   (Bank Host)    │
-│                  │  :****  │  ┌─────────┐  ┌──────────┐         │  :****  │                  │
-│  Sends ISO 8583  │         │  │ Parser  │  │  Router  │         │  :****  │  Approves /      │
-│  Authorization   │         │  │ (Parse  │──│ (BIN     │         │  :****  │  Declines the    │
+│                  │  :1177  │  ┌─────────┐  ┌──────────┐         │  :2222  │                  │
+│  Sends ISO 8583  │         │  │ Parser  │  │  Router  │         │  :3333  │  Approves /      │
+│  Authorization   │         │  │ (Parse  │──│ (BIN     │         │  :4444  │  Declines the    │
 │  Request         │         │  │  & Build)│  │  Lookup) │         │         │  Transaction     │
 │                  │◄────────┤  └─────────┘  └──────────┘         │◄────────┤                  │
 │  Receives        │  TCP    │  ┌─────────┐  ┌──────────┐         │  TCP    │  Sends ISO 8583  │
@@ -47,7 +49,7 @@ A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8
 │                  │         │  │(PIN Xlat)│  │ (SQL DB) │         │         │                  │
 └─────────────────┘         │  └─────────┘  └──────────┘         │         └─────────────────┘
                             │  ┌──────────────────────┐          │
-                            │  │  Health Check :****   │          │
+                            │  │  Health Check :8080   │          │
                             │  └──────────────────────┘          │
                             └─────────────────────────────────────┘
 ```
@@ -182,17 +184,12 @@ Defines which TCP ports the server listens on and general settings.
 
 ```xml
 <ServerConfiguration>
-  <!-- Ports for Issuer (ISS) Listener — inbound connections -->
-  <ISSlisteningPorts>
-    <Port>****</Port>
-    <Port>****</Port>
-    <Port>****</Port>
-  </ISSlisteningPorts>
-
-  <!-- Ports for Issuer (ISS) Outbound — active connections (Phase 8+) -->
-  <ISSconnectPorts>
-    <!-- Ports will be added here -->
-  </ISSconnectPorts>
+  <!-- Ports for Issuer (bank host) connections -->
+  <IssuerPorts>
+    <Port>2222</Port>  <!-- ACB -->
+    <Port>3333</Port>  <!-- PGB -->
+    <Port>4444</Port>  <!-- BIDV -->
+  </IssuerPorts>
 
   <!-- Ports for Acquirer (ATM/POS) connections -->
   <AcquirerPorts>
@@ -207,7 +204,7 @@ Defines which TCP ports the server listens on and general settings.
 
   <!-- Default values for mandatory NAPAS data elements -->
   <Defaults>
-    <DefaultAcquirerId>****</DefaultAcquirerId>
+    <DefaultAcquirerId>970418</DefaultAcquirerId>
     <DefaultCurrencyCode>704</DefaultCurrencyCode>  <!-- VND -->
     <!-- ... other defaults ... -->
   </Defaults>
@@ -226,12 +223,12 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
 <BinRoutingConfiguration>
   <Banks>
     <Bank>
-      <BankCode>****</BankCode>           <!-- Short code (internal) -->
-      <BankName>****</BankName>
-      <IssuerCode>****</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
-      <IssuerName>****</IssuerName>
-      <Host>****</Host>          <!-- Issuer's IP address -->
-      <Port>****</Port>                  <!-- Issuer's TCP port -->
+      <BankCode>ACB</BankCode>           <!-- Short code (internal) -->
+      <BankName>Asia Commercial Bank</BankName>
+      <IssuerCode>970416</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
+      <IssuerName>ACB</IssuerName>
+      <Host>10.145.48.70</Host>          <!-- Issuer's IP address -->
+      <Port>2222</Port>                  <!-- Issuer's TCP port -->
       <Timeout>30000</Timeout>           <!-- Connection timeout (ms) -->
       <Bins>
         <Bin>****</Bin>                <!-- Card BIN(s) that route here -->
@@ -250,8 +247,8 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
 
 **Environment variable overrides**: You can override host/port at runtime without changing XML:
 ```bash
-export NAPAS_BIN_HOST_ACB=192.168.1.100
-export NAPAS_BIN_PORT_ACB=5555
+export NAPAS_BIN_HOST_ACB=*******
+export NAPAS_BIN_PORT_ACB=****
 ```
 
 ---
@@ -264,8 +261,8 @@ Maps Acquirer institution codes to their names. Used for logging and identificat
 <AcquirerRoutingConfiguration>
   <Acquirers>
     <Acquirer>
-      <AcquirerCode>****</AcquirerCode>
-      <AcquirerID>****</AcquirerID>
+      <AcquirerCode>970416</AcquirerCode>
+      <AcquirerID>ACB</AcquirerID>
     </Acquirer>
     <!-- Add more acquirers... -->
   </Acquirers>
@@ -283,12 +280,11 @@ Lookup table for ISO 8583 response codes (DE#39). Used to provide human-readable
 ```xml
 <ResponseCodeConfiguration>
   <Codes>
-    <Code Code="00" Description="Approved Successfully"/>
-    <Code Code="05" Description="Unable to Process"/>
-    <Code Code="14" Description="Invalid Card number"/>
-    <Code Code="51" Description="Insufficient Balance"/>
-    <Code Code="55" Description="Incorrect PIN"/>
-    <Code Code="91" Description="Issuer unavailable"/>
+    <Code Code="code" Description="description"/>
+    <Code Code="code" Description="description"/>
+    <Code Code="code" Description="description"/>
+    <Code Code="code" Description="description"/>
+    <Code Code="code" Description="description"/>
     <!-- ... 40+ response codes defined ... -->
   </Codes>
 </ResponseCodeConfiguration>
