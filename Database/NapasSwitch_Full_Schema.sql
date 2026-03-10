@@ -21,7 +21,7 @@ END
 
 -- ============================================================
 -- 1. Create the MessageCycle table
---    Tracks each leg of the message cycle (INBOUND, FORWARDED, RECEIVED, OUTBOUND)
+--    Tracks each leg of the message cycle (INBOUND, FORWARDED, RECEIVED, OUTBOUND) 
 --    ACQ    = DE#32 Acquiring Institution ID
 --    ISS    = First 6 digits of PAN (card BIN)
 --    Sender = 'ACQ' or 'ISS' — who originated this message leg
@@ -355,7 +355,7 @@ BEGIN
     BEGIN
         CREATE NONCLUSTERED INDEX IX_TransactionLog_Settlement
             ON TransactionLog(SettlementDate, TransactionType)
-            INCLUDE (Amount, ResponseCode);
+            INCLUDE (Amount, ResponseCode);z
         PRINT '  + Created composite index IX_TransactionLog_Settlement';
     END
 

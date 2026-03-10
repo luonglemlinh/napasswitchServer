@@ -160,8 +160,8 @@ napasswitchServer/
 
 The switch supports two connection modes for Issuers:
 
-- **Passive Mode**: The Issuer connects *to* the switch. Used when an Issuer's port in `BINconfig.xml` matches one of the switch's own listening ports (defined in `ServerConfig.xml`).
-- **Active Mode**: The switch connects *to* the Issuer. Used when the Issuer's host/port points to an external address.
+- **Passive Mode**: The Issuer connects *to* the switch. Used when an Issuer's `<Host>` and `<Port>` in `BINconfig.xml` are left **empty**, and the switch listens on a port defined in `ServerConfig.xml` (`<ISSlisteningPorts>`).
+- **Active Mode**: The switch connects *to* the Issuer. Used when the Issuer's `<Host>` and `<Port>` are populated with an external IP and port in `BINconfig.xml`.
 
 ### Wire Format
 
@@ -227,8 +227,8 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
       <BankName>Asia Commercial Bank</BankName>
       <IssuerCode>970416</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
       <IssuerName>ACB</IssuerName>
-      <Host>10.145.48.70</Host>          <!-- Issuer's IP address -->
-      <Port>2222</Port>                  <!-- Issuer's TCP port -->
+      <Host>10.145.48.70</Host>          <!-- Active Mode: Issuer's IP address. Passive Mode: Leave empty -->
+      <Port>2222</Port>                  <!-- Active Mode: Issuer's TCP port. Passive Mode: Leave empty -->
       <Timeout>30000</Timeout>           <!-- Connection timeout (ms) -->
       <Bins>
         <Bin>****</Bin>                <!-- Card BIN(s) that route here -->
@@ -239,11 +239,15 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
 </BinRoutingConfiguration>
 ```
 
-**How to add a new Issuer**:
+**How to configure an Issuer (Active vs Passive)**:
 1. Add a new `<Bank>...</Bank>` block with the bank's details.
-2. Set `<Host>` and `<Port>` to the Issuer's server address.
-3. Add all card BINs that belong to this Issuer under `<Bins>`.
-4. If the Issuer connects TO the switch (passive mode), set `<Port>` to one of the switch's own `<IssuerPorts>` and add a matching port entry in `ServerConfig.xml`.
+2. Add all card BINs that belong to this Issuer under `<Bins>`.
+3. **For Active Mode (Switch connects TO Issuer)**: 
+   - Set `<Host>` to the Issuer's IP address.
+   - Set `<Port>` to the Issuer's TCP port.
+4. **For Passive Mode (Issuer connects TO Switch)**: 
+   - Leave `<Host>` and `<Port>` **completely empty** (e.g., `<Host></Host>`). 
+   - Ensure the port they will connect to is listed in `ServerConfig.xml` under `<ISSlisteningPorts>`.
 
 **Environment variable overrides**: You can override host/port at runtime without changing XML:
 ```bash

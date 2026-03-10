@@ -264,7 +264,20 @@ public class TcpSwitchServer : IDisposable
 
             foreach (var port in _ports)
             {
-                var listener = new TcpListener(IPAddress.Any, port);
+                // Use IPv6Any with DualMode = true to support both IPv4 and IPv6 on the same port.
+                // This is the recommended approach for modern .NET applications on Linux/Windows.
+                var listener = new TcpListener(IPAddress.IPv6Any, port);
+                try 
+                {
+                    listener.Server.DualMode = true; 
+                } 
+                catch (SocketException) 
+                {
+                    // Fallback to IPv4-only if DualMode is not supported by the OS (rare)
+                    SwitchLogger.Warn("DualMode socket not supported. Falling back to IPv4 for port {Port}", port);
+                    listener = new TcpListener(IPAddress.Any, port);
+                }
+
                 listener.Start();
                 _listeners.Add(listener);
 

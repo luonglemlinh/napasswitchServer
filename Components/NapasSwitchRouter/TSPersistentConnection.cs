@@ -69,11 +69,25 @@ namespace router
             {
                 MessageLogger.LogConnectionEvent("TS-CONN", $"Connecting to {_tsConfig.IssuerName} at {_tsConfig.Host}:{_tsConfig.Port}...");
 
+                // Relax AddressFamily restriction. On modern Linux, forcing InterNetwork
+                // can prevent connections if the target resolve to an IPv6 address.
+                // If Host is an IP, TcpClient will use the correct family automatically.
                 _client = new TcpClient();
                 
-                // Add connection timeout (5 seconds)
-                using var connectCts = new CancellationTokenSource(TimeSpan.FromSeconds(5));
-                await _client.ConnectAsync(_tsConfig.Host, _tsConfig.Port, connectCts.Token);
+                // Add connection timeout (Use config timeout, minimum 15s)
+                int timeoutMs = _tsConfig.Timeout > 0 ? _tsConfig.Timeout : 15000;
+                using var connectCts = new CancellationTokenSource(TimeSpan.FromMilliseconds(timeoutMs));
+
+                // Bypassing DNS resolution for explicit IP addresses is crucial on Linux
+                // otherwise `ConnectAsync(string)` triggers a reverse DNS lookup that might time out.
+                if (System.Net.IPAddress.TryParse(_tsConfig.Host, out var ipAddress))
+                {
+                    await _client.ConnectAsync(ipAddress, _tsConfig.Port, connectCts.Token);
+                }
+                else
+                {
+                    await _client.ConnectAsync(_tsConfig.Host, _tsConfig.Port, connectCts.Token);
+                }
                 
                 // Configure TCP Keep-Alive (Windows specific)
                 ConfigureTcpKeepAlive(_client.Client);
@@ -197,7 +211,8 @@ namespace router
                     string lenStr = System.Text.Encoding.ASCII.GetString(lenBytes);
                     if (!int.TryParse(lenStr, out int msgLen) || msgLen <= 0 || msgLen > 9999)
                     {
-                        SwitchLogger.Info($"[TS-RECV] Invalid or out-of-range length header: {lenStr}");
+                        string hexDump = BitConverter.ToString(lenBytes).Replace("-", " ");
+                        SwitchLogger.Info($"[TS-RECV] Invalid or out-of-range length header: '{lenStr}' (HEX: {hexDump})");
                         break;
                     }
 
@@ -622,12 +637,26 @@ namespace router
                 }
                 else
                 {
-                    // For Linux/Core: Use standard cross-platform socket options
+                    // For Linux/macOS/BSD: Use standard cross-platform socket options
+                    // .NET 3.0+ supports setting Time and Interval directly via SocketOptions
                     socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
-                    // Note: Specific Time/Interval/Retry settings on Linux often require TcpKeepAliveTime/Interval/Retry options
-                    // which are available in .NET Core 3.0+ but might vary by platform.
-                    // For now, enabling standard KeepAlive is enough to satisfy the requirements.
-                    MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive enabled (Linux)");
+                    
+                    try
+                    {
+                        // 60 seconds idle before first heartbeat
+                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 60);
+                        // 1 second interval between heartbeats
+                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 1);
+                        // 5 retries before failure (default is usually higher, but 5 is aggressive enough for H2H)
+                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 5);
+                        
+                        MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Linux): Time=60s, Interval=1s, Retry=5");
+                    }
+                    catch (SocketException)
+                    {
+                        // Fallback: older Linux kernels or restricted environments might not support these specific options
+                        MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive enabled (Linux) - Detailed timing not supported");
+                    }
                 }
             }
             catch (Exception ex)

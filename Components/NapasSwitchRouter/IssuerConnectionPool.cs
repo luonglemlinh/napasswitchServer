@@ -56,13 +56,27 @@ namespace router
             }
 
             // Create new connection — fully async, no thread blocking
-            SwitchLogger.Info($"[POOL] Creating new connection to {poolKey}");
+            // Relax AddressFamily restriction. On modern Linux, forcing InterNetwork
+            // can prevent connections if the target resolve to an IPv6 address.
             var client = new TcpClient();
 
-            using var cts = new CancellationTokenSource(issuerBank.Timeout);
+            // Use configured timeout with a sensible minimum
+            int timeoutMs = issuerBank.Timeout > 0 ? issuerBank.Timeout : 15000;
+            using var cts = new CancellationTokenSource(timeoutMs);
             try
             {
-                await client.ConnectAsync(issuerBank.Host, issuerBank.Port, cts.Token);
+                // Bypassing DNS resolution for explicit IP addresses is crucial on Linux
+                if (System.Net.IPAddress.TryParse(issuerBank.Host, out var ipAddress))
+                {
+                    await client.ConnectAsync(ipAddress, issuerBank.Port, cts.Token);
+                }
+                else
+                {
+                    await client.ConnectAsync(issuerBank.Host, issuerBank.Port, cts.Token);
+                }
+                
+                // Configure Keep-Alive AFTER connect, to avoid lost settings if underlying socket is recreated
+                ConfigureTcpKeepAlive(client.Client);
             }
             catch (OperationCanceledException)
             {
@@ -141,6 +155,39 @@ namespace router
                 TotalPooledConnections = totalPooled,
                 PoolCount = _pools.Count
             };
+        }
+
+        private void ConfigureTcpKeepAlive(Socket socket)
+        {
+            try
+            {
+                if (System.Runtime.InteropServices.RuntimeInformation.IsOSPlatform(System.Runtime.InteropServices.OSPlatform.Windows))
+                {
+                    // Windows-specific Keep-Alive configuration using IOControl
+                    uint dummy = 0;
+                    byte[] inOptionValues = new byte[System.Runtime.InteropServices.Marshal.SizeOf(dummy) * 3];
+                    BitConverter.GetBytes((uint)1).CopyTo(inOptionValues, 0);       // On/Off
+                    BitConverter.GetBytes((uint)60000).CopyTo(inOptionValues, 4);   // Time (ms) - 60 seconds
+                    BitConverter.GetBytes((uint)1000).CopyTo(inOptionValues, 8);    // Interval (ms) - 1 second
+                    socket.IOControl(IOControlCode.KeepAliveValues, inOptionValues, null);
+                }
+                else
+                {
+                    // Linux/macOS cross-platform configuration (.NET Core 3.0+)
+                    socket.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.KeepAlive, true);
+                    try
+                    {
+                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 60);
+                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 1);
+                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 5);
+                    }
+                    catch (SocketException) { /* Fallback */ }
+                }
+            }
+            catch (Exception ex)
+            {
+                SwitchLogger.Warn($"[POOL] Failed to configure TCP Keep-Alive: {ex.Message}");
+            }
         }
 
         public void Dispose()

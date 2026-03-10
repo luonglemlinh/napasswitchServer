@@ -31,8 +31,8 @@
       <BankName>BIDV</BankName>
       <IssuerCode>970418</IssuerCode>
       <IssuerName>BIDV</IssuerName>
-      <Host>10.145.48.70</Host>
-      <Port>4444</Port>
+      <Host></Host>
+      <Port></Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>970418</Bin>
@@ -43,8 +43,8 @@
       <BankName>Asia Commercial Bank</BankName>
       <IssuerCode>970416</IssuerCode>
       <IssuerName>ACB</IssuerName>
-      <Host>10.145.48.70</Host>
-      <Port>2222</Port>
+      <Host></Host>
+      <Port></Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>970416</Bin>
@@ -55,8 +55,8 @@
       <BankName>PGBank</BankName>
       <IssuerCode>970430</IssuerCode>
       <IssuerName>PGBank</IssuerName>
-      <Host>10.145.48.70</Host>
-      <Port>3333</Port>
+      <Host></Host>
+      <Port></Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>970430</Bin>
