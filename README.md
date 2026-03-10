@@ -392,8 +392,8 @@ cd napasswitchServer
 
 # 3. Set environment variables
 # (Windows PowerShell)
-$env:NAPAS_DB_CONNECTION_STRING = "Server=localhost;Database=NAPASSwitch;Integrated Security=true;TrustServerCertificate=true;"
-$env:ALLOW_HSM_STUB = "true"
+$env:NAPAS_DB_CONNECTION_STRING = "Server=localhost;Database=NAPASSwitch;Integrated Security=true;TrustServerCertificate=true;" (or your cloud's connection string)
+$env:ALLOW_HSM_STUB = "true" (for testing only)
 
 # 4. Build
 dotnet build
