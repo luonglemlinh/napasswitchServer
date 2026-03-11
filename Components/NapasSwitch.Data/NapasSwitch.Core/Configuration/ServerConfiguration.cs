@@ -82,5 +82,19 @@ namespace core.Models.Configuration
 
         [XmlElement("LogDirectory")]
         public string LogDirectory { get; set; } = "Logs";
+
+        /// <summary>
+        /// When true, DE#52 (PIN Block) is forwarded to the issuer during transactions.
+        /// Override via environment variable: NAPAS_FORWARD_PIN=true|false
+        /// </summary>
+        [XmlElement("ForwardPIN")]
+        public bool ForwardPIN { get; set; } = true;
+
+        /// <summary>
+        /// When true, DE#55 (ICC/EMV chip data) is forwarded to the issuer during transactions.
+        /// Override via environment variable: NAPAS_FORWARD_EMV=true|false
+        /// </summary>
+        [XmlElement("ForwardEMV")]
+        public bool ForwardEMV { get; set; } = true;
     }
 }

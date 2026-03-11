@@ -257,15 +257,40 @@ public class IsoParser
             throw new ArgumentException($"Insufficient data for variable field DE#{fieldDef.FieldNumber} length prefix at offset {offset}");
 
         int fieldLength = 0;
+        bool isBinaryLength = false;
+
+        // Try reading as ASCII digits first (standard NAPAS)
         for (int i = 0; i < digits; i++)
         {
             byte b = data[offset + i];
             if (b < '0' || b > '9')
-                throw new InvalidOperationException($"Invalid ASCII length digit '{ (char)b }' at offset {offset + i}");
+            {
+                isBinaryLength = true;
+                break;
+            }
             fieldLength = fieldLength * 10 + (b - '0');
         }
 
-        offset += digits;
+        if (isBinaryLength)
+        {
+            // FALLBACK: If NOT ASCII digits, try interpreting as BINARY length (Mastercard/Visa style)
+            // LLLVAR usually uses 2 bytes for binary length (e.g. 0x0206 = 518)
+            // LLVAR usually uses 1 byte
+            int binaryLenSize = fieldDef.LengthEncoding == LengthEncoding.LLLVAR ? 2 : 1;
+            
+            fieldLength = 0;
+            for (int i = 0; i < binaryLenSize; i++)
+            {
+                fieldLength = (fieldLength << 8) | data[offset + i];
+            }
+            
+            SwitchLogger.Info($"[PARSER] DE#{fieldDef.FieldNumber} using binary length: {fieldLength} (at offset {offset})");
+            offset += binaryLenSize;
+        }
+        else
+        {
+            offset += digits;
+        }
 
         if (offset + fieldLength > data.Length)
              throw new ArgumentException($"Insufficient data for variable field DE#{fieldDef.FieldNumber} content. Expected {fieldLength} bytes at offset {offset}");

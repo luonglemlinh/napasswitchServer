@@ -4,7 +4,7 @@
     <Bank>
       <BankCode>TCB</BankCode>
       <BankName>Techcombank</BankName>
-      <IssuerCode>TCB</IssuerCode>
+      <IssuerCode>970407</IssuerCode>
       <IssuerName>Techcombank</IssuerName>
       <Host></Host>
       <Port></Port>
@@ -17,7 +17,7 @@
     <Bank>
       <BankCode>MB</BankCode>
       <BankName>MB Bank</BankName>
-      <IssuerCode>MB</IssuerCode>
+      <IssuerCode>970422</IssuerCode>
       <IssuerName>MB Bank</IssuerName>
       <Host></Host>
       <Port></Port>
@@ -32,7 +32,7 @@
       <IssuerCode>970418</IssuerCode>
       <IssuerName>BIDV</IssuerName>
       <Host></Host>
-      <Port></Port>
+      <Port>4444</Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>970418</Bin>
@@ -44,7 +44,7 @@
       <IssuerCode>970416</IssuerCode>
       <IssuerName>ACB</IssuerName>
       <Host></Host>
-      <Port></Port>
+      <Port>2222</Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>970416</Bin>
@@ -56,7 +56,7 @@
       <IssuerCode>970430</IssuerCode>
       <IssuerName>PGBank</IssuerName>
       <Host></Host>
-      <Port></Port>
+      <Port>3333</Port>
       <Timeout>30000</Timeout>
       <Bins>
         <Bin>970430</Bin>
@@ -65,7 +65,7 @@
     <Bank>
       <BankCode>VCB</BankCode>
       <BankName>Vietcombank</BankName>
-      <IssuerCode>VCB</IssuerCode>
+      <IssuerCode>970436</IssuerCode>
       <IssuerName>Vietcombank</IssuerName>
       <Host></Host>
       <Port></Port>

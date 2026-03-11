@@ -441,6 +441,64 @@ cd ~/napasswitch/publish
 dotnet NapasSwitch.Server.dll --headless
 ```
 
+### 6. Run as a Service (systemd)
+
+To ensure the server runs 24/7 and restarts automatically on boot or after a crash, it is recommended to set it up as a systemd service.
+
+1.  **Create the service file**:
+    ```bash
+    sudo nano /etc/systemd/system/napasswitch.service
+    ```
+
+2.  **Paste the following configuration** (adjust paths and user as needed):
+    ```ini
+    [Unit]
+    Description="description"
+    After=network.target
+
+    [Service]
+    User= <your_user>
+    WorkingDirectory=/home/<your_user>/napasswitch/publish
+    ExecStart=/usr/bin/dotnet /home/<your_user>/napasswitch/publish/NapasSwitch.Server.dll --headless
+    Restart=always
+    RestartSec=10
+
+    # Environment Variables
+    # IMPORTANT: Use double quotes around the assignment if the value contains semicolons
+    Environment=NAPAS_DB_CONNECTION_STRING="your_connection_string_here"
+    Environment=ALLOW_HSM_STUB=false (set to "true"for testing purposes)
+    Environment=ASPNETCORE_ENVIRONMENT=Staging (or Production for production purposes)
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+
+3.  **Manage the service**:
+    ```bash
+    # Reload systemd to pick up changes
+    sudo systemctl daemon-reload
+
+    # Enable at boot and start now
+    sudo systemctl enable napasswitch.service
+    sudo systemctl start napasswitch.service
+
+    # Check status
+    sudo systemctl status napasswitch.service
+
+    # Stop or Restart
+    sudo systemctl stop napasswitch.service
+    sudo systemctl restart napasswitch.service
+    ```
+
+4.  **View logs**:
+    ```bash
+    # View live scrolling logs
+    sudo journalctl -u napasswitch.service -f
+
+    # View previous 50 lines of logs
+    sudo journalctl -u napasswitch.service -n 50
+    ```
+
 > **Tip**: The `--headless` flag runs the server without interactive prompts, suitable for background execution. It also gracefully handles `SIGINT` (Ctrl+C) and `SIGTERM` for clean shutdown.
 
 ---

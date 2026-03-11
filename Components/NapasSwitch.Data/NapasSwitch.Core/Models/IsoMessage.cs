@@ -291,7 +291,7 @@ namespace core.Models
             SwitchLogger.Info("[{SessionId}] === {Prefix} IMPORTANT FIELDS ===", sessionId, prefix);
             SwitchLogger.Info("   MTI: {MessageType}", MessageType);
 
-            int[] importantFields = { 2, 3, 4, 7, 11, 12, 13, 32, 33, 37, 38, 39, 41, 42, 63 };
+            int[] importantFields = { 2, 3, 4, 7, 11, 12, 13, 32, 33, 37, 38, 39, 41, 42, 52, 55, 63 };
 
             foreach (int field in importantFields)
             {
@@ -310,6 +310,14 @@ namespace core.Models
                     {
                         // Mask Track 2 if logged elsewhere but here we keep it safe
                         value = "[MASKED]";
+                    }
+                    else if (field == 52)
+                    {
+                        value = "[PIN BLOCK PRESENT]";
+                    }
+                    else if (field == 55)
+                    {
+                        value = $"[EMV/ICC Data: {value.Length / 2} bytes]";
                     }
 
                     SwitchLogger.Info("   {FieldNum} ({FieldDesc}): {Value}", field.ToString("D3"), GetFieldDescription(field), value);
@@ -344,6 +352,8 @@ namespace core.Models
                     value = "[TRACK DATA MASKED]";
                 else if (fieldNum == 52)
                     value = "[PIN BLOCK MASKED]";
+                else if (fieldNum == 55)
+                    value = $"[EMV/ICC Data: {value.Length / 2} bytes]";
 
                 SwitchLogger.Info("   {FieldNum} ({Label}): {Value}", fieldNum.ToString("D3"), label, value);
             }

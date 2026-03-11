@@ -471,8 +471,14 @@ public class TcpSwitchServer : IDisposable
             
             try
             {
-                if (LooksLikeHexAscii(messageBytes))
-                    messageBytes = HexToBytesSafe(System.Text.Encoding.ASCII.GetString(messageBytes));
+                // If it looks like HEX (e.g. from some testing tools), un-hex it.
+                // But avoid false positives for ASCII messages that start with "01" / "02" (MTIs)
+                if (LooksLikeHexAscii(messageBytes) && !StartsWithAsciiMti(messageBytes))
+                {
+                    string hexStr = System.Text.Encoding.ASCII.GetString(messageBytes);
+                    messageBytes = HexToBytesSafe(hexStr);
+                    SwitchLogger.Debug(" [{SessionId}] Un-hexed request message ({Len} hex chars -> {Len2} bytes)", sessionId, hexStr.Length, messageBytes.Length);
+                }
 
                 IsoMessage request;
                 try {
@@ -501,6 +507,10 @@ public class TcpSwitchServer : IDisposable
                 var validationResult = _validator.ValidateMessage(request);
                 if (!validationResult.IsValid)
                 {
+                    foreach (var error in validationResult.GetErrors())
+                    {
+                        SwitchLogger.Warn($" [{sessionId}] Validation Error (DE{error.DataElementNumber} {error.DataElementName}): {error.ErrorMessage}");
+                    }
                     txnContext.TryTransitionTo(TransactionState.Failed, validationResult.GetFirstErrorCode(), "Validation failed");
                     return _parser.Build(IsoResponseBuilder.CreateErrorResponse(request, validationResult.GetFirstErrorCode()));
                 }
@@ -710,6 +720,22 @@ public class TcpSwitchServer : IDisposable
             {
                 core.Helpers.SettlementHelper.AddSettlementAmount(request);
             }
+
+            // Field forwarding toggles (experimental)
+            // When disabled, strip DE#52/DE#55 before sending to issuer
+            var settings = _config.ServerConfig.Settings;
+
+            if (!settings.ForwardPIN && request.HasField(52))
+            {
+                request.Fields.Remove(52);
+                SwitchLogger.Info($"  [{sessionId}] DE#52 (PIN) stripped — NAPAS_FORWARD_PIN=false");
+            }
+
+            if (!settings.ForwardEMV && request.HasField(55))
+            {
+                request.Fields.Remove(55);
+                SwitchLogger.Info($"  [{sessionId}] DE#55 (EMV) stripped — NAPAS_FORWARD_EMV=false");
+            }
         }
 
         /// <summary>
@@ -725,6 +751,16 @@ public class TcpSwitchServer : IDisposable
             {
                 string pinBlockHex = request.GetField(52)!;
                 byte[] pinBlockBytes = Convert.FromHexString(pinBlockHex);
+
+                // Guard: A standard ISO PIN block is exactly 8 bytes (16 hex chars).
+                // The software HSM stub expects AES-encrypted data (IV + ciphertext = 32+ bytes).
+                // If we receive a raw 8-byte PIN block, it was NOT encrypted by our stub,
+                // so translation is not possible — pass through as-is.
+                if (pinBlockBytes.Length < 16)
+                {
+                    SwitchLogger.Debug($"  [{sessionId}] DE#52 PIN block ({pinBlockBytes.Length}B) passed through — raw block, no translation needed");
+                    return;
+                }
 
                 string acqCode = request.GetField(32) ?? "DEFAULT";
                 byte[] translated = _securityProvider.TranslatePinBlock(pinBlockBytes, acqCode, issuerBank.IssuerCode);
@@ -751,6 +787,14 @@ public class TcpSwitchServer : IDisposable
             {
                 string pinBlockHex = response.GetField(52)!;
                 byte[] pinBlockBytes = Convert.FromHexString(pinBlockHex);
+
+                // Guard: same as TranslatePinBlockForIssuer — raw 8-byte PIN blocks
+                // cannot be translated by the software HSM stub.
+                if (pinBlockBytes.Length < 16)
+                {
+                    SwitchLogger.Debug($"  [{sessionId}] DE#52 response PIN block ({pinBlockBytes.Length}B) passed through — raw block");
+                    return;
+                }
 
                 // Reverse direction: ISS key -> ACQ key
                 string acqCode = originalRequest.GetField(32) ?? "DEFAULT";
@@ -1379,6 +1423,13 @@ public class TcpSwitchServer : IDisposable
             _stateMachine?.Dispose();
             
             SwitchLogger.ForContext("DISPOSE").Info("TcpSwitchServer disposed");
+        }
+
+        private static bool StartsWithAsciiMti(byte[] data)
+        {
+            if (data.Length < 4) return false;
+            // Typical MTIs start with "01", "02", "04", "08" (ASCII)
+            return (data[0] == '0' && (data[1] == '1' || data[1] == '2' || data[1] == '4' || data[1] == '8'));
         }
 
         private static bool LooksLikeHexAscii(byte[] data)
