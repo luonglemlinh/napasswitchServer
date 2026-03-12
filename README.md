@@ -29,7 +29,6 @@ A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8
 - [Health Check & Monitoring](#health-check--monitoring)
 - [Testing](#testing)
 - [Security](#security)
-- [License](#license)
 
 ---
 
