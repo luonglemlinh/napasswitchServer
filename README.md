@@ -499,7 +499,7 @@ To ensure the server runs 24/7 and restarts automatically on boot or after a cra
     sudo journalctl -u napasswitch.service -n 50
     ```
 
-> **Tip**: The `--headless` flag runs the server without interactive prompts, suitable for background execution. It also gracefully handles `SIGINT` (Ctrl+C) and `SIGTERM` for clean shutdown.
+> **NOTE**: The `--headless` flag runs the server without interactive prompts, suitable for background execution. It also gracefully handles `SIGINT` (Ctrl+C) and `SIGTERM` for clean shutdown.
 
 ---
 
