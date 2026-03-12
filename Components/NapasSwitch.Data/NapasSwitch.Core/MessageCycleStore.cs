@@ -17,20 +17,27 @@ namespace data
         private readonly Task _writerTask;
         private readonly CancellationTokenSource _cts = new();
         private bool _disposed;
+        private volatile bool _schemaChecked;
+        private volatile bool _hasSenderColumn;
+        private volatile bool _hasResponseCodeColumn;
+        private volatile string _rawMessageColumnName = "RawMessage";
+        private volatile bool _directionConstraintSupportsInbound = true;
 
         private record CycleLogEntry(
-            string TransactionId, 
-            string SessionId, 
+            string TRANSACTIONID, 
             string? ACQ, 
             string? ISS, 
-            string Direction, 
-            string? MessageType, 
-            string? ProcessingCode, 
-            decimal? Amount, 
-            string? Stan, 
-            string? Rrn,
-            string? ResponseCode,
-            string RawMessage);
+            string? SENDER,
+            string DIRECTION, 
+            string? MESSAGETYPE, 
+            string? PROCESSINGCODE, 
+            decimal? AMOUNT, 
+            string? STAN, 
+            string? RRN,
+            DateTime LOGTIME,
+            string? RC,
+            string SESSIONID,
+            string RAWMESSAGE);
 
         public MessageCycleStore(string connectionString, bool enableLogging = true)
         {
@@ -91,14 +98,33 @@ namespace data
 
         private void FallbackToFileLog(CycleLogEntry entry)
         {
-            SwitchLogger.ForContext("MSG-CYCLE").Error("Cycle overflow fallback. Direction={Direction}, SessionId={SessionId}, RawMessage={RawMessage}", entry.Direction, entry.SessionId, entry.RawMessage);
+            SwitchLogger.ForContext("MSG-CYCLE").Error("Cycle overflow fallback. Direction={Direction}, SessionId={SessionId}, RawMessage={RawMessage}", entry.DIRECTION, entry.SESSIONID, entry.RAWMESSAGE);
+        }
+
+        /// <summary>
+        /// Derives ACQ, ISS, and Sender from a parsed ISO message.
+        /// ACQ  = DE#32
+        /// ISS  = first 6 digits of PAN (DE#2, fallback DE#35)
+        /// Sender = "ISS" if DE#39 present AND MTI is a response, else "ACQ"
+        /// </summary>
+        public static (string? acq, string? iss, string sender) DeriveRoutingFields(IsoMessage message)
+        {
+            string? acq = message.GetField(32);
+
+            string? iss = null;
+            string? bin = message.GetCardBIN(); // already handles DE#2 and DE#35 fallback
+            if (!string.IsNullOrEmpty(bin))
+                iss = bin; // BIN is already 6 digits from GetCardBIN()
+
+            bool isResponse = MtiHelper.IsResponse(message.MessageType);
+            string sender = (message.HasField(39) && isResponse) ? "ISS" : "ACQ";
+
+            return (acq, iss, sender);
         }
 
         public Task LogCycleAsync(
             string transactionId,
             string sessionId,
-            string? acq,
-            string? iss,
             string direction,
             IsoMessage? parsedMessage,
             byte[] messageBytes)
@@ -106,6 +132,10 @@ namespace data
             if (!_enableLogging) return Task.CompletedTask;
 
             var safeMessage = parsedMessage ?? TryParseMessage(messageBytes);
+            var (acq, iss, sender) = safeMessage != null
+                ? DeriveRoutingFields(safeMessage)
+                : (null, null, "ACQ");
+
             string sanitizedRawMessage = BuildSanitizedRawMessageHex(safeMessage, messageBytes);
 
             decimal? amount = null;
@@ -116,16 +146,18 @@ namespace data
 
             var entry = new CycleLogEntry(
                 transactionId,
-                sessionId,
                 acq,
                 iss,
+                sender,
                 direction,
                 safeMessage?.MessageType,
                 safeMessage?.GetField(3),
                 amount,
                 safeMessage?.GetField(11),
                 safeMessage?.GetField(37),
+                DateTime.UtcNow,
                 safeMessage?.GetField(39),
+                sessionId,
                 sanitizedRawMessage
             );
 
@@ -147,17 +179,19 @@ namespace data
             {
                 var entry = new CycleLogEntry(
                     transactionId,
-                    sessionId,
                     leg.ACQ,
                     leg.ISS,
-                    leg.Direction,
-                    leg.MessageType,
-                    leg.ProcessingCode,
-                    leg.Amount,
+                    leg.SENDER,
+                    leg.DIRECTION,
+                    leg.MESSAGETYPE,
+                    leg.PROCESSINGCODE,
+                    leg.AMOUNT,
                     leg.STAN,
                     leg.RRN,
-                    leg.ResponseCode,
-                    leg.RawMessage
+                    leg.LOGTIME,
+                    leg.RC,
+                    sessionId,
+                    leg.RAWMESSAGE
                 );
 
                 if (!_logChannel.Writer.TryWrite(entry))
@@ -172,32 +206,173 @@ namespace data
 
         private async Task InsertLogToDbAsync(SqlConnection connection, CycleLogEntry entry)
         {
-            string query = @"
-                INSERT INTO MessageCycle (
-                    TransactionId, SessionId, ACQ, ISS, Direction,
-                    MessageType, ProcessingCode, Amount, STAN, RRN, ResponseCode, LogTime, RawMessage
-                ) VALUES (
-                    @TransactionId, @SessionId, @ACQ, @ISS, @Direction,
-                    @MessageType, @ProcessingCode, @Amount, @STAN, @RRN, @ResponseCode, @LogTime, @RawMessage
-                )";
+            await EnsureSchemaAsync(connection);
+
+            // Always write using real table column names (not view aliases).
+            // Sender / ResponseCode may not exist on older databases, so we detect and omit them.
+            string query = BuildInsertQuery();
 
             using var command = new SqlCommand(query, connection);
-            command.Parameters.AddWithValue("@TransactionId", entry.TransactionId);
-            command.Parameters.AddWithValue("@SessionId", entry.SessionId);
+            AddInsertParameters(command, entry, entry.DIRECTION);
+
+            try
+            {
+                await command.ExecuteNonQueryAsync();
+            }
+            catch (SqlException ex) when (IsDirectionConstraintConflict(ex))
+            {
+                // Legacy databases may have CK_MessageCycle_Direction without INBOUND.
+                // Retry with a fallback value that is accepted by older constraints.
+                // We map INBOUND -> FORWARDED (closest "request-side" leg) to avoid dropping logs.
+                if (string.Equals(entry.DIRECTION, "INBOUND", StringComparison.OrdinalIgnoreCase))
+                {
+                    command.Parameters["@DIRECTION"].Value = "FORWARDED";
+                    await command.ExecuteNonQueryAsync();
+                    return;
+                }
+
+                throw;
+            }
+        }
+
+        private void AddInsertParameters(SqlCommand command, CycleLogEntry entry, string directionValue)
+        {
+            command.Parameters.AddWithValue("@TRANSACTIONID", entry.TRANSACTIONID);
             command.Parameters.AddWithValue("@ACQ", (object?)entry.ACQ ?? DBNull.Value);
             command.Parameters.AddWithValue("@ISS", (object?)entry.ISS ?? DBNull.Value);
-            command.Parameters.AddWithValue("@Direction", entry.Direction);
-            command.Parameters.AddWithValue("@MessageType", (object?)entry.MessageType ?? DBNull.Value);
-            command.Parameters.AddWithValue("@ProcessingCode", (object?)entry.ProcessingCode ?? DBNull.Value);
-            command.Parameters.AddWithValue("@Amount", (object?)entry.Amount ?? DBNull.Value);
-            command.Parameters.AddWithValue("@STAN", (object?)entry.Stan ?? DBNull.Value);
-            command.Parameters.AddWithValue("@RRN", (object?)entry.Rrn ?? DBNull.Value);
-            command.Parameters.AddWithValue("@ResponseCode", (object?)entry.ResponseCode ?? DBNull.Value);
-            command.Parameters.AddWithValue("@LogTime", DateTime.UtcNow);
+            command.Parameters.AddWithValue("@DIRECTION", directionValue);
+            command.Parameters.AddWithValue("@MESSAGETYPE", (object?)entry.MESSAGETYPE ?? DBNull.Value);
+            command.Parameters.AddWithValue("@PROCESSINGCODE", (object?)entry.PROCESSINGCODE ?? DBNull.Value);
+            command.Parameters.AddWithValue("@AMOUNT", (object?)entry.AMOUNT ?? DBNull.Value);
+            command.Parameters.AddWithValue("@STAN", (object?)entry.STAN ?? DBNull.Value);
+            command.Parameters.AddWithValue("@RRN", (object?)entry.RRN ?? DBNull.Value);
+            command.Parameters.AddWithValue("@LOGTIME", entry.LOGTIME);
+            command.Parameters.AddWithValue("@SESSIONID", entry.SESSIONID);
+            command.Parameters.AddWithValue("@RAWMESSAGE", entry.RAWMESSAGE);
 
-            command.Parameters.AddWithValue("@RawMessage", entry.RawMessage);
+            if (_hasSenderColumn)
+                command.Parameters.AddWithValue("@SENDER", (object?)entry.SENDER ?? DBNull.Value);
+            if (_hasResponseCodeColumn)
+                command.Parameters.AddWithValue("@RC", (object?)entry.RC ?? DBNull.Value);
+        }
 
-            await command.ExecuteNonQueryAsync();
+        private static bool IsDirectionConstraintConflict(SqlException ex)
+        {
+            // We only want to catch the specific check-constraint conflict for direction.
+            // Example message contains: CHECK constraint "CK_MessageCycle_Direction"
+            return ex.Message.Contains("CK_MessageCycle_Direction", StringComparison.OrdinalIgnoreCase)
+                   && ex.Message.Contains("Direction", StringComparison.OrdinalIgnoreCase);
+        }
+
+        private async Task EnsureSchemaAsync(SqlConnection connection)
+        {
+            if (_schemaChecked) return;
+
+            // Re-check schema whenever we establish a new connection instance
+            // (connection is recreated on SQL exceptions).
+            _schemaChecked = true;
+            _hasSenderColumn = false;
+            _hasResponseCodeColumn = false;
+            _rawMessageColumnName = "RawMessage";
+            _directionConstraintSupportsInbound = true;
+
+            const string schemaQuery = @"
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'MessageCycle';";
+
+            try
+            {
+                using var cmd = new SqlCommand(schemaQuery, connection);
+                using var reader = await cmd.ExecuteReaderAsync(_cts.Token);
+                var cols = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
+                while (await reader.ReadAsync(_cts.Token))
+                {
+                    if (reader[0] is string name && !string.IsNullOrWhiteSpace(name))
+                        cols.Add(name);
+                }
+
+                _hasSenderColumn = cols.Contains("Sender");
+                _hasResponseCodeColumn = cols.Contains("ResponseCode");
+                _rawMessageColumnName = cols.Contains("RawMessage") ? "RawMessage" :
+                                       (cols.Contains("MessageLog") ? "MessageLog" : "RawMessage");
+
+                // Inspect direction check constraint definition to see if INBOUND is allowed
+                const string constraintSql = @"
+                    SELECT definition
+                    FROM sys.check_constraints
+                    WHERE name = 'CK_MessageCycle_Direction'
+                      AND parent_object_id = OBJECT_ID('dbo.MessageCycle');";
+
+                await reader.CloseAsync();
+                using (var cc = new SqlCommand(constraintSql, connection))
+                using (var cr = await cc.ExecuteReaderAsync(_cts.Token))
+                {
+                    if (await cr.ReadAsync(_cts.Token) && cr[0] is string def)
+                    {
+                        _directionConstraintSupportsInbound = def.Contains("INBOUND", StringComparison.OrdinalIgnoreCase);
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                // If schema inspection fails, keep defaults and let the SQL error surface as before.
+            }
+        }
+
+        private string BuildInsertQuery()
+        {
+            var cols = new System.Collections.Generic.List<string>
+            {
+                "TransactionId",
+                "SessionId",
+                "ACQ",
+                "ISS",
+                "Direction",
+                "MessageType",
+                "ProcessingCode",
+                "Amount",
+                "STAN",
+                "RRN",
+                "LogTime",
+                _rawMessageColumnName
+            };
+
+            var vals = new System.Collections.Generic.List<string>
+            {
+                "@TRANSACTIONID",
+                "@SESSIONID",
+                "@ACQ",
+                "@ISS",
+                "@DIRECTION",
+                "@MESSAGETYPE",
+                "@PROCESSINGCODE",
+                "@AMOUNT",
+                "@STAN",
+                "@RRN",
+                "@LOGTIME",
+                "@RAWMESSAGE"
+            };
+
+            if (_hasSenderColumn)
+            {
+                cols.Insert(2, "Sender");
+                vals.Insert(2, "@SENDER");
+            }
+
+            if (_hasResponseCodeColumn)
+            {
+                cols.Insert(cols.IndexOf("LogTime"), "ResponseCode");
+                vals.Insert(vals.IndexOf("@LOGTIME"), "@RC");
+            }
+
+            string query = $@"
+                INSERT INTO dbo.MessageCycle (
+                    {string.Join(", ", cols)}
+                ) VALUES (
+                    {string.Join(", ", vals)}
+                )";
+            return query;
         }
 
         private IsoMessage? TryParseMessage(byte[] messageBytes)

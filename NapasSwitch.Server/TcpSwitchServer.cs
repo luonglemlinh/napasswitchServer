@@ -138,34 +138,30 @@ public class TcpSwitchServer : IDisposable
 
         foreach (var issuer in allIssuers)
         {
-            // Skip if host or port is missing
-            if (string.IsNullOrWhiteSpace(issuer.Host) || issuer.Port <= 0)
-            {
-                skipped.Add(issuer.IssuerName);
-                continue;
-            }
+            // Create the manager for every issuer
+            var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
+            manager.OnConnectionChanged += LogH2HSummary;
+            _issuerConnections[issuer.IssuerCode] = manager;
 
-            // Passive Mode Check: If the issuer's "Port" matches one of OUR listening ports,
-            // we treat it as an INBOUND connection (Passive Mode).
-            if (_ports.Contains(issuer.Port))
+            bool isPassive = _ports.Contains(issuer.Port);
+            bool isActive = !string.IsNullOrWhiteSpace(issuer.Host) && issuer.Port > 0;
+
+            if (isPassive)
             {
                 passive.Add($"{issuer.IssuerName}:{issuer.Port}");
-
-                // Map the port to this issuer so HandleClient knows who it is
                 _portToIssuerCode[issuer.Port] = issuer.IssuerCode;
-
-                // Still create the manager, but it won't dial out. It waits for AttachClient.
-                var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
-                manager.OnConnectionChanged += LogH2HSummary;
-                _issuerConnections[issuer.IssuerCode] = manager;
             }
-            else
+
+            if (isActive)
             {
-                // Active Mode: We dial out to them
+                // In hybrid mode, even if it's passive (listening), 
+                // we can also dial out if a Host is provided.
                 active.Add($"{issuer.IssuerName}->{issuer.Host}:{issuer.Port}");
-                var manager = new TSConnectionManager(issuer, channelCount: 1, heartbeatIntervalMs: 30000);
-                manager.OnConnectionChanged += LogH2HSummary;
-                _issuerConnections[issuer.IssuerCode] = manager;
+            }
+
+            if (!isPassive && !isActive)
+            {
+                skipped.Add(issuer.IssuerName);
             }
         }
 
@@ -182,10 +178,9 @@ public class TcpSwitchServer : IDisposable
     {
         Console.WriteLine("[TS-MGR] Connecting to active issuers...");
         
-        // Only connect managers that are NOT in our passive map
-        // (i.e., we are dialing out to them)
+        // Connect managers that have a Host defined (Active Mode)
         var activeIssuers = _issuerConnections
-            .Where(kvp => !_portToIssuerCode.Values.Contains(kvp.Key))
+            .Where(kvp => !string.IsNullOrWhiteSpace(kvp.Value.Config.Host) && kvp.Value.Config.Port > 0)
             .Select(kvp => kvp.Value.ConnectAllAsync());
 
         await Task.WhenAll(activeIssuers);
@@ -269,7 +264,20 @@ public class TcpSwitchServer : IDisposable
 
             foreach (var port in _ports)
             {
-                var listener = new TcpListener(IPAddress.Any, port);
+                // Use IPv6Any with DualMode = true to support both IPv4 and IPv6 on the same port.
+                // This is the recommended approach for modern .NET applications on Linux/Windows.
+                var listener = new TcpListener(IPAddress.IPv6Any, port);
+                try 
+                {
+                    listener.Server.DualMode = true; 
+                } 
+                catch (SocketException) 
+                {
+                    // Fallback to IPv4-only if DualMode is not supported by the OS (rare)
+                    SwitchLogger.Warn("DualMode socket not supported. Falling back to IPv4 for port {Port}", port);
+                    listener = new TcpListener(IPAddress.Any, port);
+                }
+
                 listener.Start();
                 _listeners.Add(listener);
 
@@ -282,7 +290,7 @@ public class TcpSwitchServer : IDisposable
             
             // Get port configuration from ServerConfig
             var serverConfig = _config.ServerConfig;
-            var issPorts = serverConfig.IssuerPorts.Select(p => p.ToString()).ToList();
+            var issPorts = serverConfig.ISSlisteningPorts.Select(p => p.ToString()).ToList();
             var acqPorts = serverConfig.AcquirerPorts.Select(p => p.ToString()).ToList();
 
             if (issPorts.Count > 0)
@@ -463,8 +471,14 @@ public class TcpSwitchServer : IDisposable
             
             try
             {
-                if (LooksLikeHexAscii(messageBytes))
-                    messageBytes = HexToBytesSafe(System.Text.Encoding.ASCII.GetString(messageBytes));
+                // If it looks like HEX (e.g. from some testing tools), un-hex it.
+                // But avoid false positives for ASCII messages that start with "01" / "02" (MTIs)
+                if (LooksLikeHexAscii(messageBytes) && !StartsWithAsciiMti(messageBytes))
+                {
+                    string hexStr = System.Text.Encoding.ASCII.GetString(messageBytes);
+                    messageBytes = HexToBytesSafe(hexStr);
+                    SwitchLogger.Debug(" [{SessionId}] Un-hexed request message ({Len} hex chars -> {Len2} bytes)", sessionId, hexStr.Length, messageBytes.Length);
+                }
 
                 IsoMessage request;
                 try {
@@ -493,12 +507,19 @@ public class TcpSwitchServer : IDisposable
                 var validationResult = _validator.ValidateMessage(request);
                 if (!validationResult.IsValid)
                 {
+                    foreach (var error in validationResult.GetErrors())
+                    {
+                        SwitchLogger.Warn($" [{sessionId}] Validation Error (DE{error.DataElementNumber} {error.DataElementName}): {error.ErrorMessage}");
+                    }
                     txnContext.TryTransitionTo(TransactionState.Failed, validationResult.GetFirstErrorCode(), "Validation failed");
                     return _parser.Build(IsoResponseBuilder.CreateErrorResponse(request, validationResult.GetFirstErrorCode()));
                 }
                 
                 txnContext.TryTransitionTo(TransactionState.Routing);
                 MessageLogger.LogMessage(sessionId, "ACQ recv", request);
+
+                // Add INBOUND log for lifecycle tracking
+                BufferLog(txnContext, "INBOUND", request, messageBytes);
 
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = !string.IsNullOrEmpty(clearPan) ? _securityProvider.EncryptPAN(clearPan) : null;
@@ -589,7 +610,7 @@ public class TcpSwitchServer : IDisposable
                 byte[] responseBytes = _parser.Build(response);
                 if (txnContext != null)
                 {
-                    BufferLog(txnContext, "OUTBOUND", response.GetAcquirerID(), response.GetIssuerID(), response, responseBytes);
+                    BufferLog(txnContext, "OUTBOUND", response, responseBytes);
                     FlushBufferedLogs(txnContext);
                 }
                 return responseBytes;
@@ -642,13 +663,14 @@ public class TcpSwitchServer : IDisposable
 
             PrepareMessageForRouting(request, issuerBank, sessionId);
 
+            txnContext.IssuerCode = issuerBank.IssuerCode;
             txnContext.TryTransitionTo(TransactionState.Routing);
 
-            BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), request.GetIssuerID(), request, _parser.Build(request));
+            BufferLog(txnContext, "FORWARDED", request, _parser.Build(request));
 
             var response = await ForwardPinTransactionAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
 
-            BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), response.GetIssuerID(), response, _parser.Build(response));
+            BufferLog(txnContext, "RECEIVED", response, _parser.Build(response));
 
             return response;
         }
@@ -698,6 +720,22 @@ public class TcpSwitchServer : IDisposable
             {
                 core.Helpers.SettlementHelper.AddSettlementAmount(request);
             }
+
+            // Field forwarding toggles (experimental)
+            // When disabled, strip DE#52/DE#55 before sending to issuer
+            var settings = _config.ServerConfig.Settings;
+
+            if (!settings.ForwardPIN && request.HasField(52))
+            {
+                request.Fields.Remove(52);
+                SwitchLogger.Info($"  [{sessionId}] DE#52 (PIN) stripped — NAPAS_FORWARD_PIN=false");
+            }
+
+            if (!settings.ForwardEMV && request.HasField(55))
+            {
+                request.Fields.Remove(55);
+                SwitchLogger.Info($"  [{sessionId}] DE#55 (EMV) stripped — NAPAS_FORWARD_EMV=false");
+            }
         }
 
         /// <summary>
@@ -713,6 +751,16 @@ public class TcpSwitchServer : IDisposable
             {
                 string pinBlockHex = request.GetField(52)!;
                 byte[] pinBlockBytes = Convert.FromHexString(pinBlockHex);
+
+                // Guard: A standard ISO PIN block is exactly 8 bytes (16 hex chars).
+                // The software HSM stub expects AES-encrypted data (IV + ciphertext = 32+ bytes).
+                // If we receive a raw 8-byte PIN block, it was NOT encrypted by our stub,
+                // so translation is not possible — pass through as-is.
+                if (pinBlockBytes.Length < 16)
+                {
+                    SwitchLogger.Debug($"  [{sessionId}] DE#52 PIN block ({pinBlockBytes.Length}B) passed through — raw block, no translation needed");
+                    return;
+                }
 
                 string acqCode = request.GetField(32) ?? "DEFAULT";
                 byte[] translated = _securityProvider.TranslatePinBlock(pinBlockBytes, acqCode, issuerBank.IssuerCode);
@@ -739,6 +787,14 @@ public class TcpSwitchServer : IDisposable
             {
                 string pinBlockHex = response.GetField(52)!;
                 byte[] pinBlockBytes = Convert.FromHexString(pinBlockHex);
+
+                // Guard: same as TranslatePinBlockForIssuer — raw 8-byte PIN blocks
+                // cannot be translated by the software HSM stub.
+                if (pinBlockBytes.Length < 16)
+                {
+                    SwitchLogger.Debug($"  [{sessionId}] DE#52 response PIN block ({pinBlockBytes.Length}B) passed through — raw block");
+                    return;
+                }
 
                 // Reverse direction: ISS key -> ACQ key
                 string acqCode = originalRequest.GetField(32) ?? "DEFAULT";
@@ -777,29 +833,31 @@ public class TcpSwitchServer : IDisposable
             return response;
         }
 
-        private void BufferLog(TransactionContext? ctx, string direction, string? acq, string? iss, IsoMessage? msg, byte[]? bytes)
+        private void BufferLog(TransactionContext? ctx, string direction, IsoMessage? msg, byte[]? bytes)
         {
             if (ctx == null || _messageCycleStore == null || bytes == null) return;
 
+            bool isResponse = msg != null && MtiHelper.IsResponse(msg.MessageType);
+            string sender = (msg != null && msg.HasField(39) && isResponse) ? "ISS" : "ACQ";
+
             decimal? amount = null;
             if (decimal.TryParse(msg?.GetField(4) ?? "0", out decimal parsedAmount))
-            {
                 amount = parsedAmount / 100m;
-            }
 
             ctx.BufferedLogs.Add(new BufferedLogEntry
             {
-                Direction = direction,
-                ACQ = acq,
-                ISS = iss,
-                MessageType = msg?.MessageType ?? "Unknown",
-                ProcessingCode = msg?.GetField(3),
-                Amount = amount,
+                DIRECTION = direction,
+                SENDER = sender,
+                ACQ = msg?.GetField(32),
+                ISS = msg?.GetCardBIN(),
+                MESSAGETYPE = msg?.MessageType ?? "Unknown",
+                PROCESSINGCODE = msg?.GetField(3),
+                AMOUNT = amount,
                 STAN = msg?.GetField(11),
                 RRN = msg?.GetField(37),
-                ResponseCode = msg?.GetField(39),
-                RawMessage = _messageCycleStore.BuildSanitizedRawMessageHex(msg, bytes),
-                LogTime = DateTime.UtcNow
+                RC = msg?.GetField(39),
+                RAWMESSAGE = _messageCycleStore.BuildSanitizedRawMessageHex(msg, bytes),
+                LOGTIME = DateTime.UtcNow
             });
         }
 
@@ -879,6 +937,10 @@ public class TcpSwitchServer : IDisposable
             SwitchLogger.ForContext("ADVICE").Info("Processing {TxnType} advice (0420). Session={SessionId}, PC={PC}",
                 txnType, sessionId, processingCode ?? "N/A");
 
+            // Resolve issuer for context
+            var issuerBank = GetIssuer(request, sessionId, txnContext);
+            if (issuerBank != null) txnContext.IssuerCode = issuerBank.IssuerCode;
+
             // Per NAPAS spec 4.1.2: Respond immediately with 0430 RC=00 to ACQ
             var ackResponse = IsoResponseBuilder.CreateSuccessResponse(request);
 
@@ -895,6 +957,10 @@ public class TcpSwitchServer : IDisposable
             _ = ForwardAdviceToIssuerAsync(requestClone, sessionId, txnContext, isVoid, cancellationToken);
 
             txnContext.TryTransitionTo(TransactionState.Completed);
+
+            // 0430 response to ACQ is OUTBOUND
+            BufferLog(txnContext, "OUTBOUND", ackResponse, _parser.Build(ackResponse));
+
             return Task.FromResult(ackResponse);
         }
 
@@ -962,12 +1028,13 @@ public class TcpSwitchServer : IDisposable
                     return;
                 }
 
+                txnContext.IssuerCode = issuerBank.IssuerCode;
                 PrepareMessageForRouting(request, issuerBank, sessionId);
                 TranslatePinBlockForIssuer(request, issuerBank, sessionId);
                 
-                BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), request.GetIssuerID(), request, _parser.Build(request));
+                BufferLog(txnContext, "FORWARDED", request, _parser.Build(request));
                 var issuerResponse = await RouteMessageAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
-                BufferLog(txnContext, "RECEIVED", issuerResponse.GetAcquirerID(), issuerResponse.GetIssuerID(), issuerResponse, _parser.Build(issuerResponse));
+                BufferLog(txnContext, "RECEIVED", issuerResponse, _parser.Build(issuerResponse));
 
                 string? rc = issuerResponse.GetField(39);
                 SwitchLogger.ForContext("ADVICE").Info(
@@ -1071,10 +1138,11 @@ public class TcpSwitchServer : IDisposable
 
             PrepareMessageForRouting(request, issuerBank, sessionId);
 
+            txnContext.IssuerCode = issuerBank.IssuerCode;
             txnContext.TryTransitionTo(TransactionState.Reversing);
-            BufferLog(txnContext, "FORWARDED", request.GetAcquirerID(), request.GetIssuerID(), request, _parser.Build(request));
+            BufferLog(txnContext, "FORWARDED", request, _parser.Build(request));
             var response = await ForwardPinTransactionAsync(request, issuerBank, sessionId, txnContext, cancellationToken);
-            BufferLog(txnContext, "RECEIVED", response.GetAcquirerID(), response.GetIssuerID(), response, _parser.Build(response));
+            BufferLog(txnContext, "RECEIVED", response, _parser.Build(response));
 
             if (_transactionLogger != null)
             {
@@ -1355,6 +1423,13 @@ public class TcpSwitchServer : IDisposable
             _stateMachine?.Dispose();
             
             SwitchLogger.ForContext("DISPOSE").Info("TcpSwitchServer disposed");
+        }
+
+        private static bool StartsWithAsciiMti(byte[] data)
+        {
+            if (data.Length < 4) return false;
+            // Typical MTIs start with "01", "02", "04", "08" (ASCII)
+            return (data[0] == '0' && (data[1] == '1' || data[1] == '2' || data[1] == '4' || data[1] == '8'));
         }
 
         private static bool LooksLikeHexAscii(byte[] data)

@@ -178,8 +178,10 @@ namespace core.ISO8583
             de54.LengthEncoding = LengthEncoding.LLLVAR;
             schema.Fields[54] = de54;
             
-            // DE55: ICC System Related Data - LLLVAR, max 999
-            var de55 = new IsoFieldDefinition(55, "ICC System Related Data", FieldType.Variable, maxLength: 999);
+            // DE55: ICC System Related Data - LLLVAR, max 999 (Binary EMV data)
+            // On the wire it is binary; the logic in TcpSwitchServer handles hex-to-binary conversion,
+            // so we treat it as binary here to ensure correct variable-length parsing.
+            var de55 = new IsoFieldDefinition(55, "ICC System Related Data", FieldType.Variable, maxLength: 999) { IsBinary = true };
             de55.LengthEncoding = LengthEncoding.LLLVAR;
             schema.Fields[55] = de55;
 

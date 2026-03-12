@@ -21,31 +21,34 @@ END
 
 -- ============================================================
 -- 1. Create the MessageCycle table
---    Tracks each leg of the message cycle (FORWARDED, RECEIVED, OUTBOUND)
---    ACQ  = F32 Acquiring Institution ID
---    ISS  = F33 Forwarding/Issuing Institution ID
+--    Tracks each leg of the message cycle (INBOUND, FORWARDED, RECEIVED, OUTBOUND) 
+--    ACQ    = DE#32 Acquiring Institution ID
+--    ISS    = First 6 digits of PAN (card BIN)
+--    Sender = 'ACQ' or 'ISS' — who originated this message leg
 -- ============================================================
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='MessageCycle' and xtype='U')
 BEGIN
     CREATE TABLE MessageCycle (
-        Id BIGINT PRIMARY KEY IDENTITY(1,1),
-        TransactionId VARCHAR(128) NOT NULL,
-        SessionId VARCHAR(20) NOT NULL,
+        ID BIGINT PRIMARY KEY IDENTITY(1,1),
+        TRANSACTIONID VARCHAR(128) NOT NULL,
         ACQ VARCHAR(11) NULL,
         ISS VARCHAR(50) NULL,
-        Direction VARCHAR(20) NOT NULL
-            CONSTRAINT CK_MessageCycle_Direction CHECK (Direction IN ('FORWARDED','RECEIVED','OUTBOUND')),
-        MessageType VARCHAR(4) NULL,
-        ProcessingCode VARCHAR(6) NULL,
-        Amount DECIMAL(18,2) NULL,
+        SENDER VARCHAR(3) NULL
+            CONSTRAINT CK_MessageCycle_Sender CHECK (SENDER IN ('ACQ', 'ISS')),
+        DIRECTION VARCHAR(20) NOT NULL
+            CONSTRAINT CK_MessageCycle_Direction CHECK (DIRECTION IN ('INBOUND','FORWARDED','RECEIVED','OUTBOUND')),
+        MESSAGETYPE VARCHAR(4) NULL,
+        PROCESSINGCODE VARCHAR(6) NULL,
+        AMOUNT DECIMAL(18,2) NULL,
         STAN VARCHAR(6) NULL,
         RRN VARCHAR(12) NULL,
-        ResponseCode VARCHAR(3) NULL,
-        LogTime DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
-        RawMessage VARCHAR(MAX) NOT NULL,
+        LOGTIME DATETIME2 NOT NULL DEFAULT GETUTCDATE(),
+        RC VARCHAR(3) NULL,
+        SESSIONID VARCHAR(20) NOT NULL,
+        RAWMESSAGE VARCHAR(MAX) NOT NULL,
 
-        INDEX IX_MessageCycle_TransactionId (TransactionId),
-        INDEX IX_MessageCycle_SessionId (SessionId)
+        INDEX IX_MessageCycle_TransactionId (TRANSACTIONID),
+        INDEX IX_MessageCycle_SessionId (SESSIONID)
     );
     PRINT '  MessageCycle table created successfully';
 END
@@ -77,11 +80,33 @@ BEGIN
         PRINT '  + Renamed column MessageLog -> RawMessage';
     END
 
-    -- Phase 4 migration: Add ResponseCode column
-    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'ResponseCode')
+    -- Phase 4 migration: Add RC column
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'RC')
     BEGIN
-        ALTER TABLE MessageCycle ADD ResponseCode VARCHAR(3) NULL;
-        PRINT '  + Added ResponseCode column to MessageCycle';
+        ALTER TABLE MessageCycle ADD RC VARCHAR(3) NULL;
+        PRINT '  + Added RC column to MessageCycle';
+    END
+
+    -- Phase 5 migration: Ensure CK_MessageCycle_Direction includes INBOUND
+    -- Older databases may have a constraint that only allows (FORWARDED, RECEIVED, OUTBOUND)
+    IF EXISTS (SELECT * FROM sys.check_constraints WHERE name = 'CK_MessageCycle_Direction')
+    BEGIN
+        ALTER TABLE MessageCycle DROP CONSTRAINT CK_MessageCycle_Direction;
+        ALTER TABLE MessageCycle ADD CONSTRAINT CK_MessageCycle_Direction
+            CHECK (DIRECTION IN ('INBOUND','FORWARDED','RECEIVED','OUTBOUND'));
+        PRINT '  + Recreated CK_MessageCycle_Direction with INBOUND support';
+    END
+
+    -- Phase 6 migration: Add SENDER column
+    IF NOT EXISTS (
+        SELECT * FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = 'MessageCycle' AND COLUMN_NAME = 'SENDER'
+    )
+    BEGIN
+        ALTER TABLE MessageCycle
+            ADD SENDER VARCHAR(3) NULL
+                CONSTRAINT CK_MessageCycle_Sender CHECK (SENDER IN ('ACQ', 'ISS'));
+        PRINT '  + Added SENDER column to MessageCycle';
     END
 END
 
@@ -93,61 +118,61 @@ END
 IF NOT EXISTS (SELECT * FROM sysobjects WHERE name='TransactionLog' and xtype='U')
 BEGIN
     CREATE TABLE TransactionLog (
-        Id BIGINT PRIMARY KEY IDENTITY(1,1),
-        SessionId VARCHAR(20) NOT NULL,
-        MessageType VARCHAR(4) NOT NULL
-            CONSTRAINT CK_TransactionLog_MessageType CHECK (MessageType LIKE '[0-9][0-9][0-9][0-9]'),
+        ID BIGINT PRIMARY KEY IDENTITY(1,1),
+        SESSIONID VARCHAR(20) NOT NULL,
+        MESSAGETYPE VARCHAR(4) NOT NULL
+            CONSTRAINT CK_TransactionLog_MessageType CHECK (MESSAGETYPE LIKE '[0-9][0-9][0-9][0-9]'),
         PAN VARCHAR(128) NULL,
-        ProcessingCode VARCHAR(6) NULL,
-        Amount DECIMAL(18,2) NULL
-            CONSTRAINT CK_TransactionLog_Amount CHECK (Amount IS NULL OR Amount >= 0),
+        PROCESSINGCODE VARCHAR(6) NULL,
+        AMOUNT DECIMAL(18,2) NULL
+            CONSTRAINT CK_TransactionLog_Amount CHECK (AMOUNT IS NULL OR AMOUNT >= 0),
         STAN VARCHAR(6) NULL,
-        AcquirerID VARCHAR(11) NULL,
-        IssuerID VARCHAR(11) NULL,
-        ResponseCode VARCHAR(3) NULL
-            CONSTRAINT CK_TransactionLog_ResponseCode CHECK (ResponseCode IS NULL OR LEN(ResponseCode) BETWEEN 2 AND 3),
-        TerminalID VARCHAR(16) NULL,
-        MerchantID VARCHAR(15) NULL,
-        TransactionTime DATETIME2 NOT NULL,
+        ACQUIRERID VARCHAR(11) NULL,
+        ISSUERID VARCHAR(11) NULL,
+        RESPONSECODE VARCHAR(3) NULL
+            CONSTRAINT CK_TransactionLog_ResponseCode CHECK (RESPONSECODE IS NULL OR LEN(RESPONSECODE) BETWEEN 2 AND 3),
+        TERMINALID VARCHAR(16) NULL,
+        MERCHANTID VARCHAR(15) NULL,
+        TRANSACTIONTIME DATETIME2 NOT NULL,
 
         -- Transaction classification (derived from MTI + Processing Code)
-        TransactionType VARCHAR(20) NULL,
+        TRANSACTIONTYPE VARCHAR(20) NULL,
 
         -- Settlement date (populated when settled from UnsettledTransactions, NULL for real-time audit entries)
-        SettlementDate DATE NULL,
+        SETTLEMENTDATE DATE NULL,
 
         -- Phase 4: Additional normalized fields for reconciliation and reporting
         RRN VARCHAR(12) NULL,
         TRN VARCHAR(50) NULL,
-        AuthorizationCode VARCHAR(6) NULL,
-        CurrencyCode VARCHAR(3) NULL,
-        POSEntryMode VARCHAR(3) NULL,
+        AUTHORIZATIONCODE VARCHAR(6) NULL,
+        CURRENCYCODE VARCHAR(3) NULL,
+        POSENTRYMODE VARCHAR(3) NULL,
 
         -- Reversal/Consolidation Fields
-        OriginalTransactionId VARCHAR(128) NULL,
-        ErrorReason VARCHAR(255) NULL,
-        RequestMessageBytes VARBINARY(MAX) NULL,
+        ORIGINALTRANSACTIONID VARCHAR(128) NULL,
+        ERRORREASON VARCHAR(255) NULL,
+        REQUESTMESSAGEBYTES VARBINARY(MAX) NULL,
 
         -- Computed column for future date-based partitioning
-        TransactionDate AS CAST(TransactionTime AS DATE) PERSISTED,
+        TRANSACTIONDATE AS CAST(TRANSACTIONTIME AS DATE) PERSISTED,
 
         -- Consolidated Tracking Fields
-        TransactionId VARCHAR(128) NOT NULL UNIQUE,
-        Status VARCHAR(10) NOT NULL DEFAULT 'PENDING'
+        TRANSACTIONID VARCHAR(128) NOT NULL UNIQUE,
+        STATUS VARCHAR(10) NOT NULL DEFAULT 'PENDING'
             CONSTRAINT CK_TransactionLog_Status 
-            CHECK (Status IN ('PENDING','MATCHED','MISMATCH','EXPIRED','VOIDED','REVERSED','ECHO')),
-        ExpiresAt DATETIME2 NULL,
+            CHECK (STATUS IN ('PENDING','MATCHED','MISMATCH','EXPIRED','VOIDED','REVERSED','ECHO')),
+        EXPIRESAT DATETIME2 NULL,
 
         -- Single-column indexes for ad-hoc queries
-        INDEX IX_SessionId (SessionId),
-        INDEX IX_TransactionTime (TransactionTime),
-        INDEX IX_AcquirerID (AcquirerID),
-        INDEX IX_IssuerID (IssuerID),
+        INDEX IX_SessionId (SESSIONID),
+        INDEX IX_TransactionTime (TRANSACTIONTIME),
+        INDEX IX_AcquirerID (ACQUIRERID),
+        INDEX IX_IssuerID (ISSUERID),
         INDEX IX_STAN (STAN),
         INDEX IX_RRN (RRN),
         INDEX IX_TRN (TRN),
-        INDEX IX_TransactionLog_Status_Expires (Status, ExpiresAt),
-        INDEX IX_TransactionLog_Original (OriginalTransactionId)
+        INDEX IX_TransactionLog_Status_Expires (STATUS, EXPIRESAT),
+        INDEX IX_TransactionLog_Original (ORIGINALTRANSACTIONID)
     );
 
     -- Composite covering index for GetStatsAsync aggregation query
@@ -172,36 +197,36 @@ BEGIN
     PRINT '- TransactionLog table already exists, checking for missing columns...'
     
     -- Sync columns for Phase 1 Migration (fixed: VARCHAR(11) to match CREATE TABLE)
-    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'AcquirerID')
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'ACQUIRERID')
     BEGIN
-        ALTER TABLE TransactionLog ADD AcquirerID VARCHAR(11) NULL;
-        PRINT '  + Added AcquirerID column';
+        ALTER TABLE TransactionLog ADD ACQUIRERID VARCHAR(11) NULL;
+        PRINT '  + Added ACQUIRERID column';
     END
     
-    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'IssuerID')
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'ISSUERID')
     BEGIN
-        ALTER TABLE TransactionLog ADD IssuerID VARCHAR(11) NULL;
-        PRINT '  + Added IssuerID column';
+        ALTER TABLE TransactionLog ADD ISSUERID VARCHAR(11) NULL;
+        PRINT '  + Added ISSUERID column';
     END
 
     -- Sync indexes
     IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_AcquirerID' AND object_id = OBJECT_ID('TransactionLog'))
     BEGIN
-        CREATE INDEX IX_AcquirerID ON TransactionLog(AcquirerID);
+        CREATE INDEX IX_AcquirerID ON TransactionLog(ACQUIRERID);
         PRINT '  + Created index IX_AcquirerID';
     END
 
     IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_IssuerID' AND object_id = OBJECT_ID('TransactionLog'))
     BEGIN
-        CREATE INDEX IX_IssuerID ON TransactionLog(IssuerID);
+        CREATE INDEX IX_IssuerID ON TransactionLog(ISSUERID);
         PRINT '  + Created index IX_IssuerID';
     END
 
     -- Sync computed column for date-based partitioning
-    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'TransactionDate')
+    IF NOT EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'TRANSACTIONDATE')
     BEGIN
-        ALTER TABLE TransactionLog ADD TransactionDate AS CAST(TransactionTime AS DATE) PERSISTED;
-        PRINT '  + Added TransactionDate computed column';
+        ALTER TABLE TransactionLog ADD TRANSACTIONDATE AS CAST(TRANSACTIONTIME AS DATE) PERSISTED;
+        PRINT '  + Added TRANSACTIONDATE computed column';
     END
 
     -- Sync STAN index
@@ -219,7 +244,7 @@ BEGIN
     END
 
     -- Phase 3 Migration: Drop old indexes that depend on Direction BEFORE recreating them or dropping the column
-    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'Direction')
+    IF EXISTS (SELECT * FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_NAME = 'TransactionLog' AND COLUMN_NAME = 'DIRECTION')
     BEGIN
         IF EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_TransactionLog_Stats' AND object_id = OBJECT_ID('TransactionLog'))
         BEGIN
@@ -237,8 +262,8 @@ BEGIN
     IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_TransactionLog_Stats' AND object_id = OBJECT_ID('TransactionLog'))
     BEGIN
         CREATE NONCLUSTERED INDEX IX_TransactionLog_Stats 
-            ON TransactionLog(TransactionTime)
-            INCLUDE (ResponseCode, Amount);
+            ON TransactionLog(TRANSACTIONTIME)
+            INCLUDE (RESPONSECODE, AMOUNT);
         PRINT '  + Created composite covering index IX_TransactionLog_Stats';
     END
 
@@ -246,8 +271,8 @@ BEGIN
     IF NOT EXISTS (SELECT * FROM sys.indexes WHERE name = 'IX_TransactionLog_ResponseCode' AND object_id = OBJECT_ID('TransactionLog'))
     BEGIN
         CREATE NONCLUSTERED INDEX IX_TransactionLog_ResponseCode 
-            ON TransactionLog(ResponseCode)
-            INCLUDE (Amount, TransactionTime);
+            ON TransactionLog(RESPONSECODE)
+            INCLUDE (AMOUNT, TRANSACTIONTIME);
         PRINT '  + Created composite index IX_TransactionLog_ResponseCode';
     END
 
@@ -330,7 +355,7 @@ BEGIN
     BEGIN
         CREATE NONCLUSTERED INDEX IX_TransactionLog_Settlement
             ON TransactionLog(SettlementDate, TransactionType)
-            INCLUDE (Amount, ResponseCode);
+            INCLUDE (Amount, ResponseCode);z
         PRINT '  + Created composite index IX_TransactionLog_Settlement';
     END
 

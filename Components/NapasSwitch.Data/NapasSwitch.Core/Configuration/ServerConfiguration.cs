@@ -10,9 +10,13 @@ namespace core.Models.Configuration
     [XmlRoot("ServerConfiguration")]
     public class ServerConfiguration
     {
-        [XmlArray("IssuerPorts")]
+        [XmlArray("ISSlisteningPorts")]
         [XmlArrayItem("Port")]
-        public List<int> IssuerPorts { get; set; } = new();
+        public List<int> ISSlisteningPorts { get; set; } = new();
+
+        [XmlArray("ISSconnectPorts")]
+        [XmlArrayItem("Port")]
+        public List<int> ISSconnectPorts { get; set; } = new();
 
         [XmlArray("AcquirerPorts")]
         [XmlArrayItem("Port")]
@@ -30,7 +34,8 @@ namespace core.Models.Configuration
         public int[] GetAllPorts()
         {
             var allPorts = new List<int>();
-            allPorts.AddRange(IssuerPorts);
+            allPorts.AddRange(ISSlisteningPorts);
+            allPorts.AddRange(ISSconnectPorts);
             allPorts.AddRange(AcquirerPorts);
             return allPorts.ToArray();
         }
@@ -74,5 +79,22 @@ namespace core.Models.Configuration
 
         [XmlElement("HealthCheckPort")]
         public int HealthCheckPort { get; set; } = 8080;
+
+        [XmlElement("LogDirectory")]
+        public string LogDirectory { get; set; } = "Logs";
+
+        /// <summary>
+        /// When true, DE#52 (PIN Block) is forwarded to the issuer during transactions.
+        /// Override via environment variable: NAPAS_FORWARD_PIN=true|false
+        /// </summary>
+        [XmlElement("ForwardPIN")]
+        public bool ForwardPIN { get; set; } = true;
+
+        /// <summary>
+        /// When true, DE#55 (ICC/EMV chip data) is forwarded to the issuer during transactions.
+        /// Override via environment variable: NAPAS_FORWARD_EMV=true|false
+        /// </summary>
+        [XmlElement("ForwardEMV")]
+        public bool ForwardEMV { get; set; } = true;
     }
 }

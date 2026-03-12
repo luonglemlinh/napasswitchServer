@@ -144,22 +144,59 @@ namespace core.Configuration
                 SwitchLogger.ForContext("CONFIG").Warn("Connection string loaded from XML config file. Use NAPAS_DB_CONNECTION_STRING env variable in production.");
             }
 
-            // Load Server Configuration (Listener Ports)
+            // Load Server Configuration (Listener Ports & Logging)
             string serverConfigPath = Path.Combine(configDirectory, "ServerConfig.xml");
             if (File.Exists(serverConfigPath))
             {
                 _serverConfig = LoadXmlConfig<ServerConfiguration>(serverConfigPath);
-                SwitchLogger.ForContext("CONFIG").Info("Loaded server configuration - ISS Ports: [{IssPorts}], ACQ Ports: [{AcqPorts}]", string.Join(", ", _serverConfig.IssuerPorts), string.Join(", ", _serverConfig.AcquirerPorts));
+                
+                SwitchLogger.ForContext("CONFIG").Info("Loaded server configuration - ISS Listen: [{IssPorts}], ACQ Ports: [{AcqPorts}], LogDir: {LogDir}", 
+                    string.Join(", ", _serverConfig.ISSlisteningPorts), 
+                    string.Join(", ", _serverConfig.AcquirerPorts),
+                    _serverConfig.Settings.LogDirectory);
+
+                // Environment variable override for log directory
+                string? envLogDir = Environment.GetEnvironmentVariable("NAPAS_LOG_DIRECTORY");
+                if (!string.IsNullOrEmpty(envLogDir))
+                {
+                    _serverConfig.Settings.LogDirectory = envLogDir;
+                    SwitchLogger.ForContext("CONFIG").Info("Log directory overriden by NAPAS_LOG_DIRECTORY: {LogDir}", envLogDir);
+                }
+
+                // Initialize Loggers with configured directory (potentially overridden)
+                SwitchLogger.Initialize(_serverConfig.Settings.LogDirectory);
+                MessageLogger.Initialize(_serverConfig.Settings.LogDirectory);
             }
             else
             {
-                SwitchLogger.ForContext("CONFIG").Warn("ServerConfig.xml not found, using default ports");
+                // Fallback for missing config file
+                string logDir = Environment.GetEnvironmentVariable("NAPAS_LOG_DIRECTORY") ?? "Logs";
+                SwitchLogger.Initialize(logDir); 
+                SwitchLogger.ForContext("CONFIG").Warn("ServerConfig.xml not found, using default ports and LogDir: {LogDir}", logDir);
                 _serverConfig = new ServerConfiguration 
                 { 
-                    IssuerPorts = new List<int> { 1111, 2222, 3333 },
+                    ISSlisteningPorts = new List<int> { 2222, 3333, 4444 },
                     AcquirerPorts = new List<int> { 1177 }
                 };
             }
+
+            // Environment variable overrides for field forwarding toggles
+            string? envForwardPIN = Environment.GetEnvironmentVariable("NAPAS_FORWARD_PIN");
+            if (!string.IsNullOrEmpty(envForwardPIN) && bool.TryParse(envForwardPIN, out bool forwardPin))
+            {
+                _serverConfig.Settings.ForwardPIN = forwardPin;
+                SwitchLogger.ForContext("CONFIG").Info("NAPAS_FORWARD_PIN override: {Value}", forwardPin);
+            }
+
+            string? envForwardEMV = Environment.GetEnvironmentVariable("NAPAS_FORWARD_EMV");
+            if (!string.IsNullOrEmpty(envForwardEMV) && bool.TryParse(envForwardEMV, out bool forwardEmv))
+            {
+                _serverConfig.Settings.ForwardEMV = forwardEmv;
+                SwitchLogger.ForContext("CONFIG").Info("NAPAS_FORWARD_EMV override: {Value}", forwardEmv);
+            }
+
+            SwitchLogger.ForContext("CONFIG").Info("Field forwarding: PIN={ForwardPIN}, EMV={ForwardEMV}", 
+                _serverConfig.Settings.ForwardPIN, _serverConfig.Settings.ForwardEMV);
 
             SwitchLogger.ForContext("CONFIG").Info("All configurations loaded");
             } // end lock

@@ -139,7 +139,12 @@ namespace server
             var connections = new System.Collections.Generic.Dictionary<string, object>();
             foreach (var kvp in _issuerConnections)
             {
-                connections[kvp.Key] = new { connected = kvp.Value.IsAnyConnected };
+                // Use BankCode for consistent display (e.g. "VCB", "TCB") instead of the raw IssuerCode/Key
+                string displayKey = !string.IsNullOrEmpty(kvp.Value.Config.BankCode) 
+                    ? kvp.Value.Config.BankCode 
+                    : kvp.Key;
+                
+                connections[displayKey] = new { connected = kvp.Value.IsAnyConnected };
             }
 
             var health = new

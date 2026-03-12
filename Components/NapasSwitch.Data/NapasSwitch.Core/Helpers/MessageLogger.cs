@@ -16,10 +16,32 @@ namespace core.Helpers
     /// </summary>
     public static class MessageLogger
     {
-        private static readonly string LogDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
-        private static readonly string LogFilePath = Path.Combine(LogDir, "message_log.txt");
-        private static readonly string NetworkLogFilePath = Path.Combine(LogDir, "network_message.txt");
-        private static readonly string ConnectionLogFilePath = Path.Combine(LogDir, "h2h_connections.txt");
+        private static string LogDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
+        private static string LogFilePath => Path.Combine(LogDir, "message_log.txt");
+        private static string NetworkLogFilePath => Path.Combine(LogDir, "network_message.txt");
+        private static string ConnectionLogFilePath => Path.Combine(LogDir, "h2h_connections.txt");
+
+        private static bool _initialized = false;
+
+        public static void Initialize(string? logDirectory = null)
+        {
+            if (_initialized) return;
+
+            if (!string.IsNullOrEmpty(logDirectory))
+            {
+                if (Path.IsPathRooted(logDirectory))
+                {
+                    LogDir = logDirectory;
+                }
+                else
+                {
+                    LogDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, logDirectory);
+                }
+            }
+            
+            _logDirExists = false; // Force re-creation check
+            _initialized = true;
+        }
 
         // Channel for non-blocking log writes - unbounded to prevent blocking callers
         private static readonly Channel<LogEntry> _logChannel = Channel.CreateUnbounded<LogEntry>(

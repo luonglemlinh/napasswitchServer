@@ -37,21 +37,21 @@ A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8
 
 ```
 ┌─────────────────┐         ┌─────────────────────────────────────┐         ┌─────────────────┐
-│   ACQ           │  TCP    │         NAPAS Switch Server         │  TCP    │        ISS      │
-│                 ├────────►│                                     ├────────►│                 │
-│                 │  Port   │  ┌─────────┐  ┌──────────┐         │  Port    │                  │
-│  Sends ISO 8583 │         │  │ Parser  │  │  Router  │         │          │  Approves /      │
-│  Authorization  │         │  │ (Parse  │──│ (BIN     │         │          │  Declines the    │
-│  Request        │         │  │  & Build)│ │  Lookup) │         │         │  Transaction      │
-│                 │◄────────┤  └─────────┘  └──────────┘         │◄────────┤                  │
-│  Receives       │  TCP    │  ┌─────────┐  ┌──────────┐         │  TCP    │  Sends ISO 8583  │
-│  Response       │         │  │Security │  │ Logging  │         │         │  Response        │
-│                 │          │  │(PIN Xlat)│  │ (SQL DB)│         │         │                  │
-└─────────────────┘          │  └─────────┘  └──────────┘         │         └─────────────────┘
-                             │  ┌──────────────────────┐          │
-                             │  │  Health Check :8080  │          │
-                             │  └──────────────────────┘          │
-                             └────────────────────────────────────┘
+│   Acquirer       │  TCP    │         NAPAS Switch Server         │  TCP    │     Issuer       │
+│  (ATM / POS)     ├────────►│                                     ├────────►│   (Bank Host)    │
+│                  │  :1177  │  ┌─────────┐  ┌──────────┐         │  :2222  │                  │
+│  Sends ISO 8583  │         │  │ Parser  │  │  Router  │         │  :3333  │  Approves /      │
+│  Authorization   │         │  │ (Parse  │──│ (BIN     │         │  :4444  │  Declines the    │
+│  Request         │         │  │  & Build)│  │  Lookup) │         │         │  Transaction     │
+│                  │◄────────┤  └─────────┘  └──────────┘         │◄────────┤                  │
+│  Receives        │  TCP    │  ┌─────────┐  ┌──────────┐         │  TCP    │  Sends ISO 8583  │
+│  Response        │         │  │Security │  │ Logging  │         │         │  Response        │
+│                  │         │  │(PIN Xlat)│  │ (SQL DB) │         │         │                  │
+└─────────────────┘         │  └─────────┘  └──────────┘         │         └─────────────────┘
+                            │  ┌──────────────────────┐          │
+                            │  │  Health Check :8080   │          │
+                            │  └──────────────────────┘          │
+                            └─────────────────────────────────────┘
 ```
 
 ### Key Concepts
@@ -128,7 +128,7 @@ napasswitchServer/
 ### Message Flow (Authorization — `0100`/`0110`)
 
 ```
-1. Acquirer connects to port 1177 via TCP
+1. Acquirer connects to port **** via TCP
 2. Acquirer sends ISO 8583 Authorization Request (MTI 0100)
 3. Switch parses the binary message using IsoParser
 4. Switch validates mandatory NAPAS data elements
@@ -160,8 +160,8 @@ napasswitchServer/
 
 The switch supports two connection modes for Issuers:
 
-- **Passive Mode**: The Issuer connects *to* the switch. Used when an Issuer's port in `BINconfig.xml` matches one of the switch's own listening ports (defined in `ServerConfig.xml`).
-- **Active Mode**: The switch connects *to* the Issuer. Used when the Issuer's host/port points to an external address.
+- **Passive Mode**: The Issuer connects *to* the switch. Used when an Issuer's `<Host>` and `<Port>` in `BINconfig.xml` are left **empty**, and the switch listens on a port defined in `ServerConfig.xml` (`<ISSlisteningPorts>`).
+- **Active Mode**: The switch connects *to* the Issuer. Used when the Issuer's `<Host>` and `<Port>` are populated with an external IP and port in `BINconfig.xml`.
 
 ### Wire Format
 
@@ -186,9 +186,9 @@ Defines which TCP ports the server listens on and general settings.
 <ServerConfiguration>
   <!-- Ports for Issuer (bank host) connections -->
   <IssuerPorts>
-    <Port>****</Port>  <!-- ACB -->
-    <Port>****</Port>  <!-- PGB -->
-    <Port>****</Port>  <!-- BIDV -->
+    <Port>2222</Port>  <!-- ACB -->
+    <Port>3333</Port>  <!-- PGB -->
+    <Port>4444</Port>  <!-- BIDV -->
   </IssuerPorts>
 
   <!-- Ports for Acquirer (ATM/POS) connections -->
@@ -199,13 +199,13 @@ Defines which TCP ports the server listens on and general settings.
   <Settings>
     <MaxConcurrentConnections>1000</MaxConcurrentConnections>
     <ConnectionTimeout>300000</ConnectionTimeout>  <!-- 5 min in ms -->
-    <HealthCheckPort>8080</HealthCheckPort>
+    <HealthCheckPort>****</HealthCheckPort>
   </Settings>
 
   <!-- Default values for mandatory NAPAS data elements -->
   <Defaults>
-    <DefaultAcquirerId>******</DefaultAcquirerId>
-    <DefaultCurrencyCode>***</DefaultCurrencyCode>  <!-- VND -->
+    <DefaultAcquirerId>970418</DefaultAcquirerId>
+    <DefaultCurrencyCode>704</DefaultCurrencyCode>  <!-- VND -->
     <!-- ... other defaults ... -->
   </Defaults>
 </ServerConfiguration>
@@ -225,10 +225,10 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
     <Bank>
       <BankCode>ACB</BankCode>           <!-- Short code (internal) -->
       <BankName>Asia Commercial Bank</BankName>
-      <IssuerCode>*****</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
+      <IssuerCode>970416</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
       <IssuerName>ACB</IssuerName>
-      <Host>****</Host>          <!-- Issuer's IP address -->
-      <Port>****</Port>                  <!-- Issuer's TCP port -->
+      <Host>10.145.48.70</Host>          <!-- Active Mode: Issuer's IP address. Passive Mode: Leave empty -->
+      <Port>2222</Port>                  <!-- Active Mode: Issuer's TCP port. Passive Mode: Leave empty -->
       <Timeout>30000</Timeout>           <!-- Connection timeout (ms) -->
       <Bins>
         <Bin>****</Bin>                <!-- Card BIN(s) that route here -->
@@ -239,11 +239,15 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
 </BinRoutingConfiguration>
 ```
 
-**How to add a new Issuer**:
+**How to configure an Issuer (Active vs Passive)**:
 1. Add a new `<Bank>...</Bank>` block with the bank's details.
-2. Set `<Host>` and `<Port>` to the Issuer's server address.
-3. Add all card BINs that belong to this Issuer under `<Bins>`.
-4. If the Issuer connects TO the switch (passive mode), set `<Port>` to one of the switch's own `<IssuerPorts>` and add a matching port entry in `ServerConfig.xml`.
+2. Add all card BINs that belong to this Issuer under `<Bins>`.
+3. **For Active Mode (Switch connects TO Issuer)**: 
+   - Set `<Host>` to the Issuer's IP address.
+   - Set `<Port>` to the Issuer's TCP port.
+4. **For Passive Mode (Issuer connects TO Switch)**: 
+   - Leave `<Host>` and `<Port>` **completely empty** (e.g., `<Host></Host>`). 
+   - Ensure the port they will connect to is listed in `ServerConfig.xml` under `<ISSlisteningPorts>`.
 
 **Environment variable overrides**: You can override host/port at runtime without changing XML:
 ```bash
@@ -261,7 +265,7 @@ Maps Acquirer institution codes to their names. Used for logging and identificat
 <AcquirerRoutingConfiguration>
   <Acquirers>
     <Acquirer>
-      <AcquirerCode>****</AcquirerCode>
+      <AcquirerCode>970416</AcquirerCode>
       <AcquirerID>ACB</AcquirerID>
     </Acquirer>
     <!-- Add more acquirers... -->
@@ -359,14 +363,14 @@ The script is **idempotent** — it can be run multiple times safely. It will:
 ### Example (Linux / Azure VM)
 
 ```bash
-export NAPAS_DB_CONNECTION_STRING='Server=tcp:myserver.database.windows.net,1433;Initial Catalog=NAPASSwitch;User ID=admin;Password=MyPass123;Encrypt=True;TrustServerCertificate=False;'
+export NAPAS_DB_CONNECTION_STRING='Server=tcp:****.database.windows.net,1433;Initial Catalog=****;User ID=****;Password=****;Encrypt=True;TrustServerCertificate=False;'
 export ALLOW_HSM_STUB=true
 ```
 
 ### Example (Windows PowerShell)
 
 ```powershell
-$env:NAPAS_DB_CONNECTION_STRING = "Server=localhost;Database=NAPASSwitch;Integrated Security=true;TrustServerCertificate=true;"
+$env:NAPAS_DB_CONNECTION_STRING = "Server=localhost;Database=****;Integrated Security=true;TrustServerCertificate=true;"
 $env:ALLOW_HSM_STUB = "true"
 ```
 
@@ -437,7 +441,65 @@ cd ~/napasswitch/publish
 dotnet NapasSwitch.Server.dll --headless
 ```
 
-> **Tip**: The `--headless` flag runs the server without interactive prompts, suitable for background execution. It also gracefully handles `SIGINT` (Ctrl+C) and `SIGTERM` for clean shutdown.
+### 6. Run as a Service (systemd)
+
+To ensure the server runs 24/7 and restarts automatically on boot or after a crash, it is recommended to set it up as a systemd service.
+
+1.  **Create the service file**:
+    ```bash
+    sudo nano /etc/systemd/system/napasswitch.service
+    ```
+
+2.  **Paste the following configuration** (adjust paths and user as needed):
+    ```ini
+    [Unit]
+    Description="description"
+    After=network.target
+
+    [Service]
+    User= <your_user>
+    WorkingDirectory=/home/<your_user>/napasswitch/publish
+    ExecStart=/usr/bin/dotnet /home/<your_user>/napasswitch/publish/NapasSwitch.Server.dll --headless
+    Restart=always
+    RestartSec=10
+
+    # Environment Variables
+    # IMPORTANT: Use double quotes around the assignment if the value contains semicolons
+    Environment=NAPAS_DB_CONNECTION_STRING="your_connection_string_here"
+    Environment=ALLOW_HSM_STUB=false (set to "true"for testing purposes)
+    Environment=ASPNETCORE_ENVIRONMENT=Staging (or Production for production purposes)
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+
+3.  **Manage the service**:
+    ```bash
+    # Reload systemd to pick up changes
+    sudo systemctl daemon-reload
+
+    # Enable at boot and start now
+    sudo systemctl enable napasswitch.service
+    sudo systemctl start napasswitch.service
+
+    # Check status
+    sudo systemctl status napasswitch.service
+
+    # Stop or Restart
+    sudo systemctl stop napasswitch.service
+    sudo systemctl restart napasswitch.service
+    ```
+
+4.  **View logs**:
+    ```bash
+    # View live scrolling logs
+    sudo journalctl -u napasswitch.service -f
+
+    # View previous 50 lines of logs
+    sudo journalctl -u napasswitch.service -n 50
+    ```
+
+> **NOTE**: The `--headless` flag runs the server without interactive prompts, suitable for background execution. It also gracefully handles `SIGINT` (Ctrl+C) and `SIGTERM` for clean shutdown.
 
 ---
 
@@ -500,7 +562,7 @@ The test suite covers:
 
 Connect a test client (e.g., a "blackbox" simulator) to the Acquirer port:
 - **Host**: Your server's IP address (or `localhost` if running locally)
-- **Port**: `1177` (default Acquirer port)
+- **Port**: `****` (default Acquirer port)
 - **Protocol**: Raw TCP with 4-byte ASCII length header + ISO 8583 binary payload
 
 ---
@@ -536,8 +598,3 @@ Card numbers (PAN) are encrypted before being stored in the database using the H
 
 Database connection strings must be provided via environment variables, not stored in XML config files. This follows PCI-DSS requirements for protecting sensitive credentials.
 
----
-
-## License
-
-This project is for educational and testing purposes.

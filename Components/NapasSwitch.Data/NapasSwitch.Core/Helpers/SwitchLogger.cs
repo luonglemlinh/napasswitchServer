@@ -30,17 +30,28 @@ namespace core.Helpers
             .CreateLogger();
 
         private static bool _initialized;
+        private static string? _currentLogDir;
 
-        /// <summary>
-        /// Initialize Serilog with console + rolling file sinks.
-        /// Call once at startup from Program.Main before any logging.
-        /// </summary>
         public static void Initialize(string? logDirectory = null)
         {
-            if (_initialized) return;
+            string logDir = logDirectory;
+            if (string.IsNullOrEmpty(logDir))
+            {
+                logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
+            }
+            else if (!Path.IsPathRooted(logDir))
+            {
+                logDir = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, logDir);
+            }
 
-            string logDir = logDirectory
-                ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "Logs");
+            // Skip if already initialized with the SAME directory
+            if (_initialized && _currentLogDir == logDir) return;
+
+            if (_initialized)
+            {
+                // Re-initializing with a new directory
+                CloseAndFlush();
+            }
 
             if (!Directory.Exists(logDir))
                 Directory.CreateDirectory(logDir);
@@ -74,6 +85,7 @@ namespace core.Helpers
                 .CreateLogger();
 
             _initialized = true;
+            _currentLogDir = logDir;
             _logger
                 .ForContext("Category", "SYSTEM")
                 .Information("Structured logging initialized. LogDir={LogDir}", Path.GetFileName(logDir));
