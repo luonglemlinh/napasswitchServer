@@ -55,7 +55,7 @@ namespace Verification
                 }
                 else
                 {
-                    Console.WriteLine("FAILURE: LogDir override failed.");
+                    Console.WriteLine("FAILURE  : LogDir override failed.");
                 }
             }
             catch (Exception ex)

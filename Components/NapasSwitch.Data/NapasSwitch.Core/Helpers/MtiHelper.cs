@@ -17,6 +17,11 @@ namespace core.Helpers
         public const string ReversalResponse = "0410";
         public const string ReversalAdviceResponse = "0430";
         public const string NetworkManagementResponse = "0810";
+        
+        // Network Management Information Codes (DE70)
+        public const string NetCodeSignOn = "001";
+        public const string NetCodeSignOff = "002";
+        public const string NetCodeEcho = "301";
 
         /// <summary>
         /// Convert a request MTI to its response MTI (e.g., 0200 ? 0210, 0420 ? 0430).

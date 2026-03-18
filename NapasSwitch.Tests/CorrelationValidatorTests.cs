@@ -111,4 +111,23 @@ public class CorrelationValidatorTests
 
         Assert.False(result.IsValid);
     }
+
+    [Fact]
+    public void NetworkManagement_ShouldCorrelate()
+    {
+        var request = new IsoMessage { MessageType = "0800" };
+        request.SetField(7, "0115120000");
+        request.SetField(11, "000001");
+        request.SetField(70, "001");
+
+        var response = new IsoMessage { MessageType = "0810" };
+        response.SetField(7, "0115120000");
+        response.SetField(11, "000001");
+        response.SetField(70, "001");
+        response.SetField(39, "00");
+
+        var result = _validator.ValidateResponseMatchesRequest(request, response);
+
+        Assert.True(result.IsValid);
+    }
 }

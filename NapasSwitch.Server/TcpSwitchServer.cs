@@ -251,7 +251,7 @@ public class TcpSwitchServer : IDisposable
                 .Select(m => $"{m.TSName}:{(m.IsAnyConnected ? "OK" : "--")}")
                 .ToList();
             int connected = _issuerConnections.Values.Count(m => m.IsAnyConnected);
-            SwitchLogger.ForContext("H2H").Info("{StatusLine}  ({Connected}/{Total} connected)", string.Join(" | ", parts), connected, _issuerConnections.Count);
+            SwitchLogger.ForContext("H2H").Debug("{StatusLine}  ({Connected}/{Total} connected)", string.Join(" | ", parts), connected, _issuerConnections.Count);
         }
 
         
@@ -554,7 +554,7 @@ public class TcpSwitchServer : IDisposable
                     MtiHelper.AuthorizationRequest => await HandleAuthorizationRequestAsync(request, sessionId, txnContext, cancellationToken),
                     MtiHelper.ReversalRequest => await HandleReversalRequestAsync(request, sessionId, txnContext, cancellationToken),
                     MtiHelper.ReversalAdvice => await HandleReversalAdviceAsync(request, sessionId, txnContext, cancellationToken),
-                    MtiHelper.NetworkManagementRequest => HandleEchoRequest(request, sessionId, txnContext),
+                    MtiHelper.NetworkManagementRequest => HandleNetworkManagementRequest(request, sessionId, txnContext),
                     _ => IsoResponseBuilder.CreateErrorResponse(request, "12")
                 };
 
@@ -1160,15 +1160,32 @@ public class TcpSwitchServer : IDisposable
         }
 
         
-        // Network Management (0800) - Echo Test
-        private IsoMessage HandleEchoRequest(IsoMessage request, string sessionId, TransactionContext txnContext)
+        // Network Management (0800) - Echo Test / Sign-on / Sign-off
+        private IsoMessage HandleNetworkManagementRequest(IsoMessage request, string sessionId, TransactionContext txnContext)
         {
             var response = IsoResponseBuilder.CreateSuccessResponse(request);
             response.MessageType = MtiHelper.NetworkManagementResponse;
-            
             response.SetField(39, "00");
             
-            if (request.HasField(70)) response.SetField(70, request.GetField(70));
+            string netCode = request.GetField(70) ?? "";
+            if (request.HasField(70)) response.SetField(70, netCode);
+
+            switch (netCode)
+            {
+                case MtiHelper.NetCodeSignOn:
+                    SwitchLogger.Debug($" [{sessionId}] Network Management: Sign-On received");
+                    break;
+                case MtiHelper.NetCodeSignOff:
+                    SwitchLogger.Debug($" [{sessionId}] Network Management: Sign-Off received");
+                    break;
+                case MtiHelper.NetCodeEcho:
+                    // Just an echo
+                    break;
+                default:
+                    if (!string.IsNullOrEmpty(netCode))
+                        SwitchLogger.Debug($" [{sessionId}] Network Management: Code {netCode} received");
+                    break;
+            }
 
             txnContext.TryTransitionTo(TransactionState.Completed);
             return response;

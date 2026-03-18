@@ -18,9 +18,9 @@ namespace data
         private readonly CancellationTokenSource _cts = new();
         private bool _disposed;
         private volatile bool _schemaChecked;
+        private readonly System.Collections.Generic.Dictionary<string, string> _columnMap = new(StringComparer.OrdinalIgnoreCase);
+        private readonly System.Threading.SemaphoreSlim _schemaLock = new(1, 1);
         private volatile bool _hasSenderColumn;
-        private volatile bool _hasResponseCodeColumn;
-        private volatile string _rawMessageColumnName = "RawMessage";
         private volatile bool _directionConstraintSupportsInbound = true;
 
         private record CycleLogEntry(
@@ -211,7 +211,6 @@ namespace data
             // Always write using real table column names (not view aliases).
             // Sender / ResponseCode may not exist on older databases, so we detect and omit them.
             string query = BuildInsertQuery();
-
             using var command = new SqlCommand(query, connection);
             AddInsertParameters(command, entry, entry.DIRECTION);
 
@@ -250,9 +249,10 @@ namespace data
             command.Parameters.AddWithValue("@SESSIONID", entry.SESSIONID);
             command.Parameters.AddWithValue("@RAWMESSAGE", entry.RAWMESSAGE);
 
-            if (_hasSenderColumn)
+            if (_hasSenderColumn && _columnMap.TryGetValue("Sender", out var senderCol))
                 command.Parameters.AddWithValue("@SENDER", (object?)entry.SENDER ?? DBNull.Value);
-            if (_hasResponseCodeColumn)
+            
+            if (_columnMap.TryGetValue("RC", out _) || _columnMap.TryGetValue("ResponseCode", out _) || _columnMap.TryGetValue("RESPONSECODE", out _))
                 command.Parameters.AddWithValue("@RC", (object?)entry.RC ?? DBNull.Value);
         }
 
@@ -267,35 +267,34 @@ namespace data
         private async Task EnsureSchemaAsync(SqlConnection connection)
         {
             if (_schemaChecked) return;
-
-            // Re-check schema whenever we establish a new connection instance
-            // (connection is recreated on SQL exceptions).
-            _schemaChecked = true;
-            _hasSenderColumn = false;
-            _hasResponseCodeColumn = false;
-            _rawMessageColumnName = "RawMessage";
-            _directionConstraintSupportsInbound = true;
-
-            const string schemaQuery = @"
-                SELECT COLUMN_NAME
-                FROM INFORMATION_SCHEMA.COLUMNS
-                WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'MessageCycle';";
-
+            
+            await _schemaLock.WaitAsync(_cts.Token);
             try
             {
+                if (_schemaChecked) return;
+
+                _hasSenderColumn = false;
+                _directionConstraintSupportsInbound = true;
+
+                const string schemaQuery = @"
+                    SELECT COLUMN_NAME
+                    FROM INFORMATION_SCHEMA.COLUMNS
+                    WHERE TABLE_SCHEMA = 'dbo' AND TABLE_NAME = 'MessageCycle';";
+
                 using var cmd = new SqlCommand(schemaQuery, connection);
-                using var reader = await cmd.ExecuteReaderAsync(_cts.Token);
-                var cols = new System.Collections.Generic.HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                while (await reader.ReadAsync(_cts.Token))
+                using (var reader = await cmd.ExecuteReaderAsync(_cts.Token))
                 {
-                    if (reader[0] is string name && !string.IsNullOrWhiteSpace(name))
-                        cols.Add(name);
+                    _columnMap.Clear();
+                    while (await reader.ReadAsync(_cts.Token))
+                    {
+                        if (reader[0] is string name && !string.IsNullOrWhiteSpace(name))
+                            _columnMap[name] = name;
+                    }
                 }
 
-                _hasSenderColumn = cols.Contains("Sender");
-                _hasResponseCodeColumn = cols.Contains("ResponseCode");
-                _rawMessageColumnName = cols.Contains("RawMessage") ? "RawMessage" :
-                                       (cols.Contains("MessageLog") ? "MessageLog" : "RawMessage");
+                _hasSenderColumn = _columnMap.ContainsKey("Sender");
+                
+                SwitchLogger.ForContext("MSG-CYCLE").Info("Schema detected for MessageCycle: [{Columns}]", string.Join(", ", _columnMap.Keys));
 
                 // Inspect direction check constraint definition to see if INBOUND is allowed
                 const string constraintSql = @"
@@ -304,7 +303,6 @@ namespace data
                     WHERE name = 'CK_MessageCycle_Direction'
                       AND parent_object_id = OBJECT_ID('dbo.MessageCycle');";
 
-                await reader.CloseAsync();
                 using (var cc = new SqlCommand(constraintSql, connection))
                 using (var cr = await cc.ExecuteReaderAsync(_cts.Token))
                 {
@@ -313,66 +311,77 @@ namespace data
                         _directionConstraintSupportsInbound = def.Contains("INBOUND", StringComparison.OrdinalIgnoreCase);
                     }
                 }
+
+                _schemaChecked = true;
             }
             catch (Exception ex)
             {
-                // If schema inspection fails, keep defaults and let the SQL error surface as before.
+                SwitchLogger.ForContext("MSG-CYCLE").Warn("Schema inspection failed: {Error}. Using defaults.", ex.Message);
+            }
+            finally
+            {
+                _schemaLock.Release();
             }
         }
 
         private string BuildInsertQuery()
         {
-            var cols = new System.Collections.Generic.List<string>
-            {
-                "TransactionId",
-                "SessionId",
-                "ACQ",
-                "ISS",
-                "Direction",
-                "MessageType",
-                "ProcessingCode",
-                "Amount",
-                "STAN",
-                "RRN",
-                "LogTime",
-                _rawMessageColumnName
-            };
+            var cols = new System.Collections.Generic.List<string>();
+            var vals = new System.Collections.Generic.List<string>();
 
-            var vals = new System.Collections.Generic.List<string>
+            void Add(string logicalName, string parameterName)
             {
-                "@TRANSACTIONID",
-                "@SESSIONID",
-                "@ACQ",
-                "@ISS",
-                "@DIRECTION",
-                "@MESSAGETYPE",
-                "@PROCESSINGCODE",
-                "@AMOUNT",
-                "@STAN",
-                "@RRN",
-                "@LOGTIME",
-                "@RAWMESSAGE"
-            };
-
-            if (_hasSenderColumn)
-            {
-                cols.Insert(2, "Sender");
-                vals.Insert(2, "@SENDER");
+                // Find actual name from DB if possible, fallback to logical name
+                string actualName = logicalName;
+                if (_columnMap.TryGetValue(logicalName, out var fromDb)) 
+                    actualName = fromDb;
+                
+                cols.Add(actualName);
+                vals.Add(parameterName);
             }
 
-            if (_hasResponseCodeColumn)
+            Add("TransactionId", "@TRANSACTIONID");
+            Add("SessionId", "@SESSIONID");
+            
+            if (_hasSenderColumn) Add("Sender", "@SENDER");
+
+            Add("ACQ", "@ACQ");
+            Add("ISS", "@ISS");
+            Add("Direction", "@DIRECTION");
+            Add("MessageType", "@MESSAGETYPE");
+            Add("ProcessingCode", "@PROCESSINGCODE");
+            Add("Amount", "@AMOUNT");
+            Add("STAN", "@STAN");
+            Add("RRN", "@RRN");
+
+            // Handle Response code column specially as it has multiple aliases
+            string? rcCol = null;
+            if (_columnMap.TryGetValue("RC", out var c1)) rcCol = c1;
+            else if (_columnMap.TryGetValue("ResponseCode", out var c2)) rcCol = c2;
+            else if (_columnMap.TryGetValue("RESPONSECODE", out var c3)) rcCol = c3;
+
+            if (rcCol != null)
             {
-                cols.Insert(cols.IndexOf("LogTime"), "ResponseCode");
-                vals.Insert(vals.IndexOf("@LOGTIME"), "@RC");
+                cols.Add(rcCol);
+                vals.Add("@RC");
             }
 
-            string query = $@"
+            Add("LogTime", "@LOGTIME");
+
+            // Handle RawMessage aliases
+            string rawMsgCol = "RawMessage";
+            if (_columnMap.TryGetValue("RawMessage", out var r1)) rawMsgCol = r1;
+            else if (_columnMap.TryGetValue("MessageLog", out var r2)) rawMsgCol = r2;
+            
+            cols.Add(rawMsgCol);
+            vals.Add("@RAWMESSAGE");
+
+            return $@"
                 INSERT INTO dbo.MessageCycle (
                     {string.Join(", ", cols)}
                 ) VALUES (
                     {string.Join(", ", vals)}
                 )";
-            return query;
         }
 
         private IsoMessage? TryParseMessage(byte[] messageBytes)
@@ -451,6 +460,7 @@ namespace data
             _logChannel.Writer.Complete();
             _cts.Cancel();
             try { _writerTask.Wait(TimeSpan.FromSeconds(5)); } catch { }
+            _schemaLock.Dispose();
             _cts.Dispose();
         }
     }

@@ -112,13 +112,13 @@ namespace router
                 
                 if (signOnSuccess)
                 {
-                    SwitchLogger.Info($"[TS-CONN] ISS connected: {_tsConfig.IssuerName} at {_tsConfig.Host}:{_tsConfig.Port}");
+                    SwitchLogger.Debug($"[TS-CONN] ISS connected: {_tsConfig.IssuerName} at {_tsConfig.Host}:{_tsConfig.Port}");
                     MessageLogger.LogConnectionEvent("TS-CONN", $"Successfully connected and signed on to {_tsConfig.IssuerName}");
                     return true;
                 }
                 else
                 {
-                    SwitchLogger.Info($"[TS-CONN] Sign-on failed, closing connection");
+                    SwitchLogger.Warn($"[TS-CONN] Sign-on failed for {_tsConfig.IssuerName}, closing connection");
                     Disconnect();
                     return false;
                 }
@@ -331,15 +331,34 @@ namespace router
         /// </summary>
         private async Task<bool> SendSignOnAsync()
         {
-            var signOnMsg = BuildNetworkMessage("001"); // 001 = Sign-on
+            var signOnMsg = BuildNetworkMessage(MtiHelper.NetCodeSignOn); 
             MessageLogger.LogConnectionEvent("TS-CONN", "Sending sign-on (0800)...");
 
             var response = await SendRequestAsync(signOnMsg, "SIGN-ON");
             
             if (response != null)
             {
-                string rc = response.GetResponseCode() ?? "96";
+                string rc = response.GetResponseCode() ?? "00"; // Assume 00 if successful correlation but no RC
                 MessageLogger.LogConnectionEvent("TS-CONN", $"Sign-on response: RC={rc}");
+                return rc == "00";
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Send sign-off (0800) message to TS
+        /// </summary>
+        private async Task<bool> SendSignOffAsync()
+        {
+            var signOffMsg = BuildNetworkMessage(MtiHelper.NetCodeSignOff);
+            MessageLogger.LogConnectionEvent("TS-CONN", "Sending sign-off (0800)...");
+
+            var response = await SendRequestAsync(signOffMsg, "SIGN-OFF");
+            
+            if (response != null)
+            {
+                string rc = response.GetResponseCode() ?? "00";
+                MessageLogger.LogConnectionEvent("TS-CONN", $"Sign-off response: RC={rc}");
                 return rc == "00";
             }
             return false;
@@ -361,7 +380,7 @@ namespace router
                 return;
             }
 
-            var heartbeatMsg = BuildNetworkMessage("301"); // 301 = Echo test
+            var heartbeatMsg = BuildNetworkMessage(MtiHelper.NetCodeEcho); // 301 = Echo test
             try
             {
                 var response = await SendRequestAsync(heartbeatMsg, "HEARTBEAT");
@@ -497,6 +516,15 @@ namespace router
         private string BuildCorrelationKey(IsoMessage msg)
         {
             string stan = msg.Fields.ContainsKey(11) ? msg.Fields[11] : "000000";
+            
+            // For 0800/0810, only use STAN and NetCode to match, 
+            // as some TS systems may not echo DE7 accurately or may omit DE37.
+            if (MtiHelper.IsNetworkManagement(msg.MessageType))
+            {
+                string netCode = msg.Fields.ContainsKey(70) ? msg.Fields[70] : "";
+                return $"{_tsConfig.IssuerName}|{msg.MessageType[..2]}00|{stan}|{netCode}";
+            }
+
             string rrn = msg.Fields.ContainsKey(37) ? msg.Fields[37] : "";
             string date = msg.Fields.ContainsKey(7) ? msg.Fields[7] : "";
             return $"{_tsConfig.IssuerName}|{stan}|{rrn}|{date}";
@@ -600,13 +628,24 @@ namespace router
             _client = null;
             _stream = null;
 
-            SwitchLogger.Warn($"[TS-CONN] ISS disconnected: {_tsConfig.IssuerName} ({_tsConfig.IssuerCode})");
+            SwitchLogger.Info($"[DISCONNECT-ISS] ISS disconnected: {_tsConfig.IssuerName} ({_tsConfig.IssuerCode})");
         }
 
         public async Task SignOffAndDisconnectAsync()
         {
+            if (IsConnected)
+            {
+                try 
+                {
+                    // Attempt graceful sign-off before disconnecting
+                    await SendSignOffAsync();
+                }
+                catch (Exception ex)
+                {
+                    SwitchLogger.Warn($"[TS-CONN] Graceful sign-off failed: {ex.Message}");
+                }
+            }
             Disconnect(); 
-            await Task.CompletedTask;
         }
 
         public void Dispose()
@@ -630,10 +669,10 @@ namespace router
                 {
                     byte[] inOptionValues = new byte[12];
                     BitConverter.GetBytes((uint)1).CopyTo(inOptionValues, 0); // On
-                    BitConverter.GetBytes((uint)60000).CopyTo(inOptionValues, 4); // Time (60s)
+                    BitConverter.GetBytes((uint)30000).CopyTo(inOptionValues, 4); // Time (30s)
                     BitConverter.GetBytes((uint)1000).CopyTo(inOptionValues, 8); // Interval (1s)
                     socket.IOControl(IOControlCode.KeepAliveValues, inOptionValues, null);
-                    MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Windows): Idle=60s, Interval=1s");
+                    MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Windows): Idle=30s, Interval=1s");
                 }
                 else
                 {
@@ -643,14 +682,14 @@ namespace router
                     
                     try
                     {
-                        // 60 seconds idle before first heartbeat
-                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 60);
+                        // 30 seconds idle before first heartbeat
+                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 30);
                         // 1 second interval between heartbeats
                         socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 1);
                         // 5 retries before failure (default is usually higher, but 5 is aggressive enough for H2H)
                         socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 5);
                         
-                        MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Linux): Time=60s, Interval=1s, Retry=5");
+                        MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Linux): Time=30s, Interval=1s, Retry=5");
                     }
                     catch (SocketException)
                     {

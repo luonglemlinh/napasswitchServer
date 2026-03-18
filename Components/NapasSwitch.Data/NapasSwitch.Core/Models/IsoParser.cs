@@ -17,7 +17,7 @@ public class IsoParser
 
     public IsoParser(IsoSchema? schema = null)
     {
-        _schema = schema ?? IsoSchema.GetNapasSchema();
+        _schema = schema ?? IsoSchema.GetNapasSchema(); 
     }
 
     
