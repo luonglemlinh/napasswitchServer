@@ -133,13 +133,11 @@ napasswitchServer/
 4. Switch validates mandatory NAPAS data elements
 5. Switch extracts card BIN (first 6 digits of DE#2 PAN)
 6. Switch looks up the BIN in BINconfig.xml → finds the Issuer
-7. Switch translates PIN block (DE#52) from ACQ zone key → ISS zone key
-8. Switch forwards the request to the Issuer via persistent H2H connection
-9. Issuer responds with Authorization Response (MTI 0110)
-10. Switch translates PIN block back: ISS zone key → ACQ zone key
-11. Switch validates response correlation (STAN, RRN match)
-12. Switch logs the transaction to SQL Server
-13. Switch sends the response back to the Acquirer
+7. Switch forwards the request to the Issuer via persistent H2H connection
+8. Issuer responds with Authorization Response (MTI 0110)
+9. Switch validates response correlation (STAN, RRN match)
+10. Switch logs the transaction to SQL Server
+11. Switch sends the response back to the Acquirer
 ```
 
 ### Supported Message Types
