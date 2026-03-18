@@ -355,7 +355,7 @@ BEGIN
     BEGIN
         CREATE NONCLUSTERED INDEX IX_TransactionLog_Settlement
             ON TransactionLog(SettlementDate, TransactionType)
-            INCLUDE (Amount, ResponseCode);z
+            INCLUDE (Amount, ResponseCode);
         PRINT '  + Created composite index IX_TransactionLog_Settlement';
     END
 

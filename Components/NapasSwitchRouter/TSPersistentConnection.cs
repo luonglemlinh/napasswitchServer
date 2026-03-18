@@ -669,10 +669,10 @@ namespace router
                 {
                     byte[] inOptionValues = new byte[12];
                     BitConverter.GetBytes((uint)1).CopyTo(inOptionValues, 0); // On
-                    BitConverter.GetBytes((uint)60000).CopyTo(inOptionValues, 4); // Time (60s)
+                    BitConverter.GetBytes((uint)30000).CopyTo(inOptionValues, 4); // Time (30s)
                     BitConverter.GetBytes((uint)1000).CopyTo(inOptionValues, 8); // Interval (1s)
                     socket.IOControl(IOControlCode.KeepAliveValues, inOptionValues, null);
-                    MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Windows): Idle=60s, Interval=1s");
+                    MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Windows): Idle=30s, Interval=1s");
                 }
                 else
                 {
@@ -682,14 +682,14 @@ namespace router
                     
                     try
                     {
-                        // 60 seconds idle before first heartbeat
-                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 60);
+                        // 30 seconds idle before first heartbeat
+                        socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveTime, 30);
                         // 1 second interval between heartbeats
                         socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveInterval, 1);
                         // 5 retries before failure (default is usually higher, but 5 is aggressive enough for H2H)
                         socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.TcpKeepAliveRetryCount, 5);
                         
-                        MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Linux): Time=60s, Interval=1s, Retry=5");
+                        MessageLogger.LogConnectionEvent("TS-CONN", "TCP Keep-Alive configured (Linux): Time=30s, Interval=1s, Retry=5");
                     }
                     catch (SocketException)
                     {

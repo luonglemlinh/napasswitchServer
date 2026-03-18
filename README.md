@@ -35,23 +35,23 @@ A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8
 ## Architecture Overview
 
 ```
-┌─────────────────┐         ┌─────────────────────────────────────┐         ┌─────────────────┐
-│   Acquirer       │  TCP    │         NAPAS Switch Server         │  TCP    │     Issuer       │
-│  (ATM / POS)     ├────────►│                                     ├────────►│   (Bank Host)    │
-│                  │  :1177  │  ┌─────────┐  ┌──────────┐         │  :2222  │                  │
-│  Sends ISO 8583  │         │  │ Parser  │  │  Router  │         │  :3333  │  Approves /      │
-│  Authorization   │         │  │ (Parse  │──│ (BIN     │         │  :4444  │  Declines the    │
-│  Request         │         │  │  & Build)│  │  Lookup) │         │         │  Transaction     │
-│                  │◄────────┤  └─────────┘  └──────────┘         │◄────────┤                  │
-│  Receives        │  TCP    │  ┌─────────┐  ┌──────────┐         │  TCP    │  Sends ISO 8583  │
-│  Response        │         │  │Security │  │ Logging  │         │         │  Response        │
-│                  │         │  │(PIN Xlat)│  │ (SQL DB) │         │         │                  │
-└─────────────────┘         │  └─────────┘  └──────────┘         │         └─────────────────┘
-                            │  ┌──────────────────────┐          │
-                            │  │  Health Check :8080   │          │
-                            │  └──────────────────────┘          │
-                            └─────────────────────────────────────┘
-
++-----------------+         +-------------------------------------+         +-----------------+
+|   Acquirer      |  TCP    |         NAPAS Switch Server         |  TCP    |     Issuer      |
+|  (ATM / POS)    +---------+-->|                                     +---------+-->|   (Bank Host)   |
+|                 |  :****  |  +---------+  +----------+          |  :****  |                 |
+|  Sends ISO 8583 |         |  | Parser  |  |  Router  |          |  :****  |  Approves /     |
+|  Authorization  |         |  | (Parse  +--+ (BIN     |          |  :****  |  Declines the   |
+|  Request        |         |  |  & Build)|  |  Lookup) |          |         |  Transaction    |
+|                 |<--------+--+---------+  +----------+          |<--------+-----------------+
+|  Receives       |  TCP    |  +---------+  +----------+          |  TCP    |  Sends ISO 8583 |
+|  Response       |         |  |Security |  | Logging  |          |         |  Response       |
+|                 |         |  |(PIN Xlat)|  | (SQL DB) |          |         |                 |
++-----------------+         |  +---------+  +----------+          |         +-----------------+
+                            |  +----------------------+           |
+                            |  |  Health Check :****   |           |
+                            |  +----------------------+           |
+                            +-------------------------------------+
+```
 
 ### Key Concepts
 
@@ -73,51 +73,51 @@ A high-performance, multi-threaded **ISO 8583 payment switch** built with .NET 8
 
 ```
 napasswitchServer/
-├── NapasSwitch.sln                         # Solution file
-├── Config/                                 # All XML configuration files
-│   ├── ServerConfig.xml                    # Listening ports & server settings
-│   ├── BINconfig.xml                       # BIN → Issuer routing table
-│   ├── ACQconfig.xml                       # Acquirer institution registry
-│   ├── RCconfig.xml                        # ISO 8583 response code descriptions
-│   ├── DBconfig.xml                        # Database connection settings
-│   └── NapasFieldsConfig.xml              # Data element validation rules
-│
-├── Database/
-│   └── NapasSwitch_Full_Schema.sql         # SQL Server schema (idempotent)
-│
-├── NapasSwitch.Server/                     # Main executable project
-│   ├── Program.cs                          # Entry point & startup sequence
-│   ├── TcpSwitchServer.cs                  # Core TCP server & message processing
-│   └── HealthCheckServer.cs                # HTTP health/metrics endpoint
-│
-├── Components/
-│   ├── NapasSwitch.Data/                   # Data layer
-│   │   ├── TransactionLogger.cs            # SQL transaction logging
-│   │   ├── NapasSwitch.Core/               # Core domain library
-│   │   │   ├── Configuration/              # XML config loaders (ConfigurationLoader.cs)
-│   │   │   ├── Models/                     # ISO message models (IsoMessage, IsoParser)
-│   │   │   ├── Helpers/                    # MTI, logging, metrics, response builders
-│   │   │   └── Security/                   # HSM interface & software stub
-│   │   └── Models/                         # Data transfer objects
-│   │
-│   ├── NapasSwitch.Network/                # Network & validation layer
-│   │   ├── Validation/                     # NAPAS field validation & correlation
-│   │   └── NapasSwitch.Routing/            # (Reserved for future routing logic)
-│   │
-│   └── NapasSwitchRouter/                  # Routing & connection management
-│       ├── IssuerConnector.cs              # Issuer message forwarding
-│       ├── IssuerConnectionPool.cs         # Connection pooling
-│       ├── TSConnectionManager.cs          # Persistent H2H connection manager
-│       ├── TSPersistentConnection.cs       # Single persistent TCP connection
-│       ├── TransactionStateMachine.cs      # Transaction lifecycle tracking
-│       └── RetryPolicy.cs                  # Retry & SAF (Store-and-Forward) logic
-│
-└── NapasSwitch.Tests/                      # Unit tests (xUnit)
-    ├── IsoParserTests.cs
-    ├── MtiHelperTests.cs
-    ├── MessageFramerTests.cs
-    ├── CorrelationValidatorTests.cs
-    └── TransactionTypeTests.cs
++-- NapasSwitch.sln                         # Solution file
++-- Config/                                 # All XML configuration files
+|   +-- ServerConfig.xml                    # Listening ports & server settings
+|   +-- BINconfig.xml                       # BIN -> Issuer routing table
+|   +-- ACQconfig.xml                       # Acquirer institution registry
+|   +-- RCconfig.xml                        # ISO 8583 response code descriptions
+|   +-- DBconfig.xml                        # Database connection settings
+|   +-- NapasFieldsConfig.xml               # Data element validation rules
+|
++-- Database/
+|   +-- NapasSwitch_Full_Schema.sql         # SQL Server schema (idempotent)
+|
++-- NapasSwitch.Server/                     # Main executable project
+|   +-- Program.cs                          # Entry point & startup sequence
+|   +-- TcpSwitchServer.cs                  # Core TCP server & message processing
+|   +-- HealthCheckServer.cs                # HTTP health/metrics endpoint
+|
++-- Components/
+|   +-- NapasSwitch.Data/                   # Data layer
+|   |   +-- TransactionLogger.cs            # SQL transaction logging
+|   |   +-- NapasSwitch.Core/               # Core domain library
+|   |   |   +-- Configuration/              # XML config loaders (ConfigurationLoader.cs)
+|   |   |   +-- Models/                     # ISO message models (IsoMessage, IsoParser)
+|   |   |   +-- Helpers/                    # MTI, logging, metrics, response builders
+|   |   |   +-- Security/                   # HSM interface & software stub
+|   |   +-- Models/                         # Data transfer objects
+|   |
+|   +-- NapasSwitch.Network/                # Network & validation layer
+|   |   +-- Validation/                     # NAPAS field validation & correlation
+|   |   +-- NapasSwitch.Routing/            # (Reserved for future routing logic)
+|   |
+|   +-- NapasSwitchRouter/                  # Routing & connection management
+|       +-- IssuerConnector.cs              # Issuer message forwarding
+|       +-- IssuerConnectionPool.cs         # Connection pooling
+|       +-- TSConnectionManager.cs          # Persistent H2H connection manager
+|       +-- TSPersistentConnection.cs       # Single persistent TCP connection
+|       +-- TransactionStateMachine.cs      # Transaction lifecycle tracking
+|       +-- RetryPolicy.cs                  # Retry & SAF (Store-and-Forward) logic
+|
++-- NapasSwitch.Tests/                      # Unit tests (xUnit)
+    +-- IsoParserTests.cs
+    +-- MtiHelperTests.cs
+    +-- MessageFramerTests.cs
+    +-- CorrelationValidatorTests.cs
+    +-- TransactionTypeTests.cs
 ```
 
 ---
@@ -185,9 +185,9 @@ Defines which TCP ports the server listens on and general settings.
 <ServerConfiguration>
   <!-- Ports for Issuer (bank host) connections -->
   <IssuerPorts>
-    <Port>2222</Port>  <!-- ACB -->
-    <Port>3333</Port>  <!-- PGB -->
-    <Port>4444</Port>  <!-- BIDV -->
+    <Port>****</Port>  <!-- ACB -->
+    <Port>****</Port>  <!-- PGB -->
+    <Port>****</Port>  <!-- BIDV -->
   </IssuerPorts>
 
   <!-- Ports for Acquirer (ATM/POS) connections -->
@@ -196,14 +196,13 @@ Defines which TCP ports the server listens on and general settings.
   </AcquirerPorts>
 
   <Settings>
-    <MaxConcurrentConnections>1000</MaxConcurrentConnections>
     <ConnectionTimeout>300000</ConnectionTimeout>  <!-- 5 min in ms -->
     <HealthCheckPort>****</HealthCheckPort>
   </Settings>
 
   <!-- Default values for mandatory NAPAS data elements -->
   <Defaults>
-    <DefaultAcquirerId>970418</DefaultAcquirerId>
+    <DefaultAcquirerId>****</DefaultAcquirerId>
     <DefaultCurrencyCode>704</DefaultCurrencyCode>  <!-- VND -->
     <!-- ... other defaults ... -->
   </Defaults>
@@ -224,10 +223,10 @@ This is the **routing table**. Each `<Bank>` entry maps one or more card BINs to
     <Bank>
       <BankCode>ACB</BankCode>           <!-- Short code (internal) -->
       <BankName>Asia Commercial Bank</BankName>
-      <IssuerCode>970416</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
+      <IssuerCode>****</IssuerCode>    <!-- NAPAS institution ID (DE#33) -->
       <IssuerName>ACB</IssuerName>
-      <Host>10.145.48.70</Host>          <!-- Active Mode: Issuer's IP address. Passive Mode: Leave empty -->
-      <Port>2222</Port>                  <!-- Active Mode: Issuer's TCP port. Passive Mode: Leave empty -->
+      <Host>****</Host>          <!-- Active Mode: Issuer's IP address. Passive Mode: Leave empty -->
+      <Port>****</Port>                  <!-- Active Mode: Issuer's TCP port. Passive Mode: Leave empty -->
       <Timeout>30000</Timeout>           <!-- Connection timeout (ms) -->
       <Bins>
         <Bin>****</Bin>                <!-- Card BIN(s) that route here -->
@@ -264,7 +263,7 @@ Maps Acquirer institution codes to their names. Used for logging and identificat
 <AcquirerRoutingConfiguration>
   <Acquirers>
     <Acquirer>
-      <AcquirerCode>970416</AcquirerCode>
+      <AcquirerCode>****</AcquirerCode>
       <AcquirerID>ACB</AcquirerID>
     </Acquirer>
     <!-- Add more acquirers... -->
@@ -305,7 +304,7 @@ Lookup table for ISO 8583 response codes (DE#39). Used to provide human-readable
 </DatabaseConfiguration>
 ```
 
-> **⚠️ Important**: The connection string should be provided via the `NAPAS_DB_CONNECTION_STRING` environment variable (see [Environment Variables](#environment-variables)). Do NOT hardcode credentials in this file.
+> **Important**: The connection string should be provided via the `NAPAS_DB_CONNECTION_STRING` environment variable (see [Environment Variables](#environment-variables)). Do NOT hardcode credentials in this file.
 
 ---
 
@@ -325,7 +324,7 @@ Run the schema script against your SQL Server instance:
 
 ```bash
 # Using sqlcmd (local SQL Server)
-sqlcmd -S localhost -i Database/NapasSwitch_Full_Schema.sql
+sqlcmd -S **** -i Database/NapasSwitch_Full_Schema.sql
 
 # Using Azure Data Studio or SSMS
 # Open Database/NapasSwitch_Full_Schema.sql and execute
@@ -369,7 +368,7 @@ export ALLOW_HSM_STUB=true
 ### Example (Windows PowerShell)
 
 ```powershell
-$env:NAPAS_DB_CONNECTION_STRING = "Server=localhost;Database=****;Integrated Security=true;TrustServerCertificate=true;"
+$env:NAPAS_DB_CONNECTION_STRING = "Server=****;Database=****;Integrated Security=true;TrustServerCertificate=true;"
 $env:ALLOW_HSM_STUB = "true"
 ```
 
@@ -387,7 +386,7 @@ $env:ALLOW_HSM_STUB = "true"
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/your-username/napasswitchServer.git
+git clone https://github.com/luonglemlinh/napasswitchServer.git
 cd napasswitchServer
 
 # 2. Set up the database
@@ -395,7 +394,7 @@ cd napasswitchServer
 
 # 3. Set environment variables
 # (Windows PowerShell)
-$env:NAPAS_DB_CONNECTION_STRING = "Server=localhost;Database=NAPASSwitch;Integrated Security=true;TrustServerCertificate=true;"
+$env:NAPAS_DB_CONNECTION_STRING = "Server=****;Database=NAPASSwitch;Integrated Security=true;TrustServerCertificate=true;"
 $env:ALLOW_HSM_STUB = "true"
 
 # 4. Build
@@ -407,18 +406,19 @@ dotnet run --project NapasSwitch.Server
 
 The server will display an interactive console:
 ```
-╔════════════════════════════════════════════════════════════╗
-║                      Switch                                ║
-║                    Version 1.0                             ║
-╚════════════════════════════════════════════════════════════╝
+```
++------------------------------------------------------------+
+|                      Switch                                |
+|                    Version 1.0                             |
++------------------------------------------------------------+
 
 Press ENTER to start the server, or 'Q' to quit...
 ```
 
 **Interactive commands** (when not in headless mode):
-- **`S`** — Show active connections
-- **`P`** — Pause / Resume the server
-- **`Q`** — Graceful shutdown
+- **S** -- Show active connections
+- **P** -- Pause / Resume the server
+- **Q** -- Graceful shutdown
 
 ### Deploy to Linux / Azure VM
 
@@ -504,7 +504,7 @@ To ensure the server runs 24/7 and restarts automatically on boot or after a cra
 
 ## Health Check & Monitoring
 
-The server exposes an HTTP health check endpoint on the port defined in `ServerConfig.xml` (default: `8080`).
+The server exposes an HTTP health check endpoint on the port defined in `ServerConfig.xml` (default: `****`).
 
 | Endpoint | Method | Description |
 |:---------|:-------|:------------|
@@ -551,7 +551,7 @@ dotnet test
 ```
 
 The test suite covers:
-- **IsoParser**: Message parsing and building (binary ↔ object)
+- **IsoParser**: Message parsing and building (binary <-> object)
 - **MtiHelper**: MTI classification (financial, reversal, advice, network management)
 - **MessageFramer**: Length-prefixed framing (4-byte ASCII header)
 - **CorrelationValidator**: Request-response field matching
@@ -560,7 +560,7 @@ The test suite covers:
 ### Integration Testing
 
 Connect a test client (e.g., a "blackbox" simulator) to the Acquirer port:
-- **Host**: Your server's IP address (or `localhost` if running locally)
+- **Host**: Your server's IP address (or `****` if running locally)
 - **Port**: `****` (default Acquirer port)
 - **Protocol**: Raw TCP with 4-byte ASCII length header + ISO 8583 binary payload
 
