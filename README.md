@@ -416,7 +416,7 @@ Press ENTER to start the server, or 'Q' to quit...
 **Interactive commands** (when not in headless mode):
 - **S** -- Show active connections
 - **P** -- Pause / Resume the server
-- **Q** -- Graceful shutdown
+- **Q** -- Instant shutdown
 
 ### Deploy to Linux / Azure VM
 
