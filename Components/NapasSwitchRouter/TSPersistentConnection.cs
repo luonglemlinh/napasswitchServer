@@ -317,7 +317,15 @@ namespace router
                 // Set Response Code 00 (Success)
                 response.SetField(39, "00");
 
-                // SwitchLogger.Info($"[TS-AUTO] Sending Echo Response (0810) for STAN={response.Fields[11]}");
+                // DE32: Acquiring Institution Identification Code (Mandatory in NAPAS)
+                string acquirerId = _tsConfig.IssuerCode;
+                if (string.IsNullOrEmpty(acquirerId) || !acquirerId.All(char.IsDigit))
+                {
+                    acquirerId = _tsConfig.AllBins?.FirstOrDefault() ?? "970418";
+                }
+                if (acquirerId.Length < 6 || acquirerId.Length > 11) acquirerId = "970418";
+                response.SetField(32, acquirerId);
+
                 await SendMessageInternalAsync(response, "AUTO-ECHO", isResponse: true);
             }
             catch (Exception ex)

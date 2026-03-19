@@ -362,7 +362,7 @@ public class TcpSwitchServer : IDisposable
                 bool accepted = await manager!.AcceptConnectionAsync(client);
                 if (!accepted)
                 {
-                    SwitchLogger.ForContext("H2H").Warn("Passive ISS connection FAILED for {Issuer} from {RemoteEp} (sign-on rejected)", issuerLabel, remoteEp);
+                    SwitchLogger.ForContext("H2H").Debug("Passive ISS connection FAILED for {Issuer} from {RemoteEp} (sign-on rejected)", issuerLabel, remoteEp);
                     MessageLogger.LogConnectionEvent("H2H-PASSIVE", $"Manager failed to accept connection for {issuerLabel}");
                     client.Close();
                 }
