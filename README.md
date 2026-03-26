@@ -494,8 +494,11 @@ To ensure the server runs 24/7 and restarts automatically on boot or after a cra
     # View live scrolling logs
     sudo journalctl -u napasswitch.service -f
 
-    # View previous 50 lines of logs
-    sudo journalctl -u napasswitch.service -n 50
+    # View previous X lines of logs
+    sudo journalctl -u napasswitch.service -n X
+
+    # View a new cycle of ONE most recent transaction in the message log
+    tail -121 message_log.txt
     ```
 
 > **NOTE**: The `--headless` flag runs the server without interactive prompts, suitable for background execution. It also gracefully handles `SIGINT` (Ctrl+C) and `SIGTERM` for clean shutdown.
@@ -563,6 +566,19 @@ Connect a test client (e.g., a "blackbox" simulator) to the Acquirer port:
 - **Host**: Your server's IP address (or `****` if running locally)
 - **Port**: `****` (default Acquirer port)
 - **Protocol**: Raw TCP with 4-byte ASCII length header + ISO 8583 binary payload
+
+### Utilities: Decoding ISO Messages
+
+The `decode_iso.ps1` script is a PowerShell utility provided to manually unpack and read a raw ISO 8583 hexadecimal string. It is extremely useful for debugging parsing errors.
+
+**How to use:**
+1. Open `decode_iso.ps1` in your editor.
+2. Replace the hardcoded string on **Line 1** (`$hex = "..."`) with your own captured raw hex payload.
+3. Save the file and run it from your PowerShell terminal:
+   ```powershell
+   .\decode_iso.ps1
+   ```
+The script will cleanly decode the MTI, the Bitmap, and print out every Data Element (field) according to NAPAS formatting rules.
 
 ---
 
