@@ -524,6 +524,10 @@ public class TcpSwitchServer : IDisposable
                 string? clearPan = request.GetField(2);
                 string? encryptedPan = !string.IsNullOrEmpty(clearPan) ? _securityProvider.EncryptPAN(clearPan) : null;
 
+                // Capture card BIN from original clear-text request BEFORE PAN encryption.
+                // This is the same mechanism MessageCycle uses (msg.GetCardBIN()).
+                string? cardBIN = request.GetCardBIN();
+
                 string? curCode = request.GetField(49);
                 string? posMode = request.GetField(22);
                 string? settlementDate = request.GetField(15);
@@ -546,7 +550,7 @@ public class TcpSwitchServer : IDisposable
                     txnContext.RequestBytes = messageBytes;
                     var requestCopy = CloneWithEncryptedPan(request, encryptedPan);
                     if (_transactionLogger != null) 
-                        _ = _transactionLogger.LogRequestAsync(requestCopy, messageBytes, txnContext.TransactionId, sessionId, 5, curCode, posMode, settlementDate);
+                        _ = _transactionLogger.LogRequestAsync(requestCopy, messageBytes, txnContext.TransactionId, sessionId, 5, curCode, posMode, settlementDate, null, cardBIN, request.GetAcquirerID());
                 }
 
                 IsoMessage response = request.MessageType switch
@@ -578,7 +582,7 @@ public class TcpSwitchServer : IDisposable
                         txnContext.TryTransitionTo(TransactionState.Failed, "30", "Correlation failed");
                         response = IsoResponseBuilder.CreateErrorResponse(request, "30");
                     }
-                    else if (_transactionLogger != null) await _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId, curCode, posMode, settlementDate);
+                    else if (_transactionLogger != null) await _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId, curCode, posMode, settlementDate, null, cardBIN, request.GetAcquirerID());
                 }
                 else if (MtiHelper.IsAdvice(request.MessageType))
                 {
@@ -592,7 +596,7 @@ public class TcpSwitchServer : IDisposable
                 stopwatch.Stop();
                 int timeMs = (int)stopwatch.ElapsedMilliseconds;
 
-                if (_transactionLogger != null && txnContext != null) _ = _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId, curCode, posMode, settlementDate);
+                if (_transactionLogger != null && txnContext != null) _ = _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId, curCode, posMode, settlementDate, null, cardBIN, request.GetAcquirerID());
 
                 // 11.2: Record completion metrics
                 string? rc = response.GetField(39);
@@ -1042,7 +1046,7 @@ public class TcpSwitchServer : IDisposable
 
                 if (_transactionLogger != null)
                     _ = _transactionLogger.LogTransactionAsync(request, issuerResponse, txnContext.TransactionId, sessionId, 
-                        request.GetField(49), request.GetField(22), request.GetField(15), originalTransactionId);
+                        request.GetField(49), request.GetField(22), request.GetField(15), originalTransactionId, request.GetCardBIN(), request.GetAcquirerID());
                 
                 FlushBufferedLogs(txnContext);
             }
@@ -1147,7 +1151,7 @@ public class TcpSwitchServer : IDisposable
             if (_transactionLogger != null)
             {
                 _ = _transactionLogger.LogTransactionAsync(request, response, txnContext.TransactionId, sessionId,
-                    request.GetField(49), request.GetField(22), request.GetField(15), originalTransactionId);
+                    request.GetField(49), request.GetField(22), request.GetField(15), originalTransactionId, request.GetCardBIN(), request.GetAcquirerID());
             }
 
             if (response.GetField(39) == "00")

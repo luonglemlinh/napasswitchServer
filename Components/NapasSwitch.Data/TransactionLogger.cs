@@ -27,8 +27,8 @@ namespace data
         private bool _disposed;
 
         private abstract record LogEntry;
-        private sealed record TransactionLogEntry(IsoMessage Request, IsoMessage Response, string TransactionId, string SessionId, string? CurrencyCode = null, string? PosEntryMode = null, string? SettlementDate = null, string? OriginalTransactionId = null) : LogEntry;
-        private sealed record RequestLogEntry(IsoMessage Request, byte[] MessageBytes, string TransactionId, string SessionId, int ExpirationMinutes, string? CurrencyCode = null, string? PosEntryMode = null, string? SettlementDate = null, string? OriginalTransactionId = null) : LogEntry;
+        private sealed record TransactionLogEntry(IsoMessage Request, IsoMessage Response, string TransactionId, string SessionId, string? CurrencyCode = null, string? PosEntryMode = null, string? SettlementDate = null, string? OriginalTransactionId = null, string? IssuerId = null, string? AcquirerId = null) : LogEntry;
+        private sealed record RequestLogEntry(IsoMessage Request, byte[] MessageBytes, string TransactionId, string SessionId, int ExpirationMinutes, string? CurrencyCode = null, string? PosEntryMode = null, string? SettlementDate = null, string? OriginalTransactionId = null, string? IssuerId = null, string? AcquirerId = null) : LogEntry;
         private sealed record StatusUpdateEntry(string TransactionId, string Status, string? ErrorReason = null, string? ResponseCode = null) : LogEntry;
 
         public TransactionLogger(string connectionString, bool enableLogging = true, SecureDataHandler? secureDataHandler = null)
@@ -60,10 +60,10 @@ namespace data
                         switch (entry)
                         {
                             case TransactionLogEntry txn:
-                                await LogTransactionToDbAsync(connection, txn.Request, txn.Response, txn.TransactionId, txn.SessionId, txn.CurrencyCode, txn.PosEntryMode, txn.SettlementDate, txn.OriginalTransactionId);
+                                await LogTransactionToDbAsync(connection, txn.Request, txn.Response, txn.TransactionId, txn.SessionId, txn.CurrencyCode, txn.PosEntryMode, txn.SettlementDate, txn.OriginalTransactionId, txn.IssuerId, txn.AcquirerId);
                                 break;
                             case RequestLogEntry req:
-                                await LogRequestToDbAsync(connection, req.Request, req.MessageBytes, req.TransactionId, req.SessionId, req.ExpirationMinutes, req.CurrencyCode, req.PosEntryMode, req.SettlementDate, req.OriginalTransactionId);
+                                await LogRequestToDbAsync(connection, req.Request, req.MessageBytes, req.TransactionId, req.SessionId, req.ExpirationMinutes, req.CurrencyCode, req.PosEntryMode, req.SettlementDate, req.OriginalTransactionId, req.IssuerId, req.AcquirerId);
                                 break;
                             case StatusUpdateEntry status:
                                 await UpdateStatusInDbAsync(connection, status.TransactionId, status.Status, status.ErrorReason, status.ResponseCode);
@@ -125,14 +125,14 @@ namespace data
             return SecureDataHandler.MaskPAN(pan);
         }
 
-        public Task LogTransactionAsync(IsoMessage request, IsoMessage response, string transactionId, string sessionId, string? currencyCode = null, string? posEntryMode = null, string? settlementDate = null, string? originalTransactionId = null)
+        public Task LogTransactionAsync(IsoMessage request, IsoMessage response, string transactionId, string sessionId, string? currencyCode = null, string? posEntryMode = null, string? settlementDate = null, string? originalTransactionId = null, string? issuerId = null, string? acquirerId = null)
         {
             if (!_enableLogging) return Task.CompletedTask;
-            _logChannel.Writer.TryWrite(new TransactionLogEntry(request, response, transactionId, sessionId, currencyCode, posEntryMode, settlementDate, originalTransactionId));
+            _logChannel.Writer.TryWrite(new TransactionLogEntry(request, response, transactionId, sessionId, currencyCode, posEntryMode, settlementDate, originalTransactionId, issuerId, acquirerId));
             return Task.CompletedTask;
         }
 
-        private async Task LogTransactionToDbAsync(SqlConnection connection, IsoMessage request, IsoMessage response, string transactionId, string sessionId, string? currencyCode, string? posEntryMode, string? settlementDate, string? originalTransactionId)
+        private async Task LogTransactionToDbAsync(SqlConnection connection, IsoMessage request, IsoMessage response, string transactionId, string sessionId, string? currencyCode, string? posEntryMode, string? settlementDate, string? originalTransactionId, string? explicitIssuerId = null, string? explicitAcquirerId = null)
         {
             string upsertQuery = @"
                 IF EXISTS (SELECT 1 FROM TransactionLog WHERE TRANSACTIONID = @TRANSACTIONID)
@@ -140,9 +140,11 @@ namespace data
                     UPDATE TransactionLog SET
                         RESPONSECODE = @RESPONSECODE,
                         AUTHORIZATIONCODE = @AUTHORIZATIONCODE,
-                        RRN = COALESCE(RRN, @RRN),
-                        CURRENCYCODE = COALESCE(CURRENCYCODE, @CURRENCYCODE),
-                        POSENTRYMODE = COALESCE(POSENTRYMODE, @POSENTRYMODE),
+                        RRN = COALESCE(@RRN, RRN),
+                        CURRENCYCODE = COALESCE(@CURRENCYCODE, CURRENCYCODE),
+                        POSENTRYMODE = COALESCE(@POSENTRYMODE, POSENTRYMODE),
+                        ACQUIRERID = COALESCE(@ACQUIRERID, ACQUIRERID),
+                        ISSUERID = COALESCE(@ISSUERID, ISSUERID),
                         STATUS = 'MATCHED'
                     WHERE TRANSACTIONID = @TRANSACTIONID;
                 END
@@ -170,8 +172,16 @@ namespace data
                 command.Parameters.AddWithValue("@PROCESSINGCODE", (object?)request.GetProcessingCode() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@AMOUNT", ParseAmount(request.GetAmount()));
                 command.Parameters.AddWithValue("@STAN", (object?)request.GetSTAN() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@ACQUIRERID", (object?)request.GetAcquirerID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@ISSUERID", (object?)GetBestIssuerID(request, response) ?? DBNull.Value);
+                string? determinedIssuer = GetBestIssuerID(request, response, explicitIssuerId);
+                string? determinedAcquirer = explicitAcquirerId ?? request.GetAcquirerID();
+                
+                if (string.IsNullOrEmpty(determinedIssuer))
+                {
+                    SwitchLogger.ForContext("DB-LOG").Info("No ISS determined for transaction {TransactionId} (explicitId={Explicit})", transactionId, explicitIssuerId ?? "null");
+                }
+
+                command.Parameters.AddWithValue("@ACQUIRERID", (object?)determinedAcquirer ?? DBNull.Value);
+                command.Parameters.AddWithValue("@ISSUERID", (object?)determinedIssuer ?? DBNull.Value);
                 command.Parameters.AddWithValue("@RESPONSECODE", (object?)response.GetResponseCode() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@TERMINALID", (object?)request.GetTerminalID() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@MERCHANTID", (object?)request.GetMerchantID() ?? DBNull.Value);
@@ -185,19 +195,19 @@ namespace data
                 command.Parameters.AddWithValue("@POSENTRYMODE", (object?)posEntryMode ?? DBNull.Value);
                 command.Parameters.AddWithValue("@SETTLEMENTDATE", string.IsNullOrEmpty(settlementDate) ? (object)DBNull.Value : settlementDate);
                 command.Parameters.AddWithValue("@ORIGINALTRANSACTIONID", (object?)originalTransactionId ?? DBNull.Value);
-
+                
                 await command.ExecuteNonQueryAsync();
             }
         }
 
-        public Task LogRequestAsync(IsoMessage request, byte[] messageBytes, string transactionId, string sessionId, int expirationMinutes = 5, string? currencyCode = null, string? posEntryMode = null, string? settlementDate = null, string? originalTransactionId = null)
+        public Task LogRequestAsync(IsoMessage request, byte[] messageBytes, string transactionId, string sessionId, int expirationMinutes = 5, string? currencyCode = null, string? posEntryMode = null, string? settlementDate = null, string? originalTransactionId = null, string? issuerId = null, string? acquirerId = null)
         {
             if (!_enableLogging) return Task.CompletedTask;
-            _logChannel.Writer.TryWrite(new RequestLogEntry(request, messageBytes, transactionId, sessionId, expirationMinutes, currencyCode, posEntryMode, settlementDate, originalTransactionId));
+            _logChannel.Writer.TryWrite(new RequestLogEntry(request, messageBytes, transactionId, sessionId, expirationMinutes, currencyCode, posEntryMode, settlementDate, originalTransactionId, issuerId, acquirerId));
             return Task.CompletedTask;
         }
 
-        private async Task LogRequestToDbAsync(SqlConnection connection, IsoMessage request, byte[] messageBytes, string transactionId, string sessionId, int expirationMinutes, string? currencyCode, string? posEntryMode, string? settlementDate, string? originalTransactionId)
+        private async Task LogRequestToDbAsync(SqlConnection connection, IsoMessage request, byte[] messageBytes, string transactionId, string sessionId, int expirationMinutes, string? currencyCode, string? posEntryMode, string? settlementDate, string? originalTransactionId, string? explicitIssuerId = null, string? explicitAcquirerId = null)
         {
             string query = @"
                 INSERT INTO TransactionLog (
@@ -221,8 +231,8 @@ namespace data
                 command.Parameters.AddWithValue("@PROCESSINGCODE", (object?)request.GetProcessingCode() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@AMOUNT", ParseAmount(request.GetAmount()));
                 command.Parameters.AddWithValue("@STAN", (object?)request.GetSTAN() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@ACQUIRERID", (object?)request.GetAcquirerID() ?? DBNull.Value);
-                command.Parameters.AddWithValue("@ISSUERID", (object?)GetBestIssuerID(request, null) ?? DBNull.Value);
+                command.Parameters.AddWithValue("@ACQUIRERID", (object?)explicitAcquirerId ?? (object?)request.GetAcquirerID() ?? DBNull.Value);
+                command.Parameters.AddWithValue("@ISSUERID", (object?)GetBestIssuerID(request, null, explicitIssuerId) ?? DBNull.Value);
                 command.Parameters.AddWithValue("@TERMINALID", (object?)request.GetTerminalID() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@MERCHANTID", (object?)request.GetMerchantID() ?? DBNull.Value);
                 command.Parameters.AddWithValue("@TRANSACTIONTYPE",
@@ -241,21 +251,35 @@ namespace data
             }
         }
 
-        private string? GetBestIssuerID(IsoMessage request, IsoMessage? response)
+        private string? GetBestIssuerID(IsoMessage request, IsoMessage? response, string? explicitId = null)
         {
-            // Priority: DE#33 (Forwarding ID) > DE#100 (Receiving ID) > DE#32 (Acquirer ID - ONLY for responses where request has no ISS)
-            string? iss = request.GetIssuerID();
+            // 0. Priority: Explicit override from switch routing
+            if (!string.IsNullOrEmpty(explicitId)) return explicitId;
+
+            // 1. Try explicit routing fields in request
+            string? iss = request.GetIssuerID(); // DE#33
             if (!string.IsNullOrEmpty(iss)) return iss;
 
             iss = request.GetField(100);
             if (!string.IsNullOrEmpty(iss)) return iss;
 
+            // 2. Try Card BIN (matches MessageCycleStore logic)
+            iss = request.GetCardBIN();
+            if (!string.IsNullOrEmpty(iss)) return iss;
+
+            // 3. Try fields in response if available
             if (response != null)
             {
                 iss = response.GetIssuerID();
                 if (!string.IsNullOrEmpty(iss)) return iss;
                 
-                iss = response.GetAcquirerID(); // In many responses, ACQ field sometimes holds switch-specific issuer IDs
+                iss = response.GetField(100);
+                if (!string.IsNullOrEmpty(iss)) return iss;
+
+                iss = response.GetCardBIN();
+                if (!string.IsNullOrEmpty(iss)) return iss;
+                
+                iss = response.GetAcquirerID(); // DE#32 in response
                 if (!string.IsNullOrEmpty(iss)) return iss;
             }
 
