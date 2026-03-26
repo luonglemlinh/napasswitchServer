@@ -1,4 +1,4 @@
-$hex = "30323030723E648108E0900231393937303431362A2A2A2A2A2A2A2A2A393932333030303030303030303030303832333530303033323631303434313931313133373131303434313930333236333130313033323635343131373034303131303030363937303438383630383530313131313337314155544F303030314D30303030303030303038383134374D59534F4654504F532042414E4B2020202020202020204841204E4F4920202020202020203730343730340000000000000000303136476B30593038627234534D6833626963"
+$hex = "30323030723C648108E0900031393937303431363636303632323632313939323330303030303030303030303036323632303030333236313431333037313131333736313431333037303332363331303135343131373034303131303030363937303438383630383530313131313337364155544F303030314D30303030303030303038383134374D59534F4654504F532042414E4B2020202020202020204841204E4F49202020202020202037303437303430363132353235304444394445363644"
 
 $bytes = [byte[]]::new($hex.Length / 2)
 for ($i = 0; $i -lt $hex.Length; $i += 2) {
@@ -52,8 +52,29 @@ foreach ($f in ($fields | Sort-Object)) {
     try {
         if ($binaryFixed.ContainsKey($f)) {
             $len = $binaryFixed[$f]
-            $val = [BitConverter]::ToString($bytes, $pos, $len).Replace("-","")
-            Write-Host ("DE#{0,-3} ({1,-25}): {2}  (binary {3} bytes)" -f $f, $name, $val, $len)
+            
+            # [NAPAS-FIX] Handle 16-char ASCII Hex shift for DE#52
+            if ($f -eq 52 -and $len -eq 8) {
+                $isHex = $true
+                for ($i=0; $i -lt 16; $i++) {
+                    $b = $bytes[$pos + $i]
+                    if (-not (($b -ge 48 -and $b -le 57) -or ($b -ge 65 -and $b -le 70) -or ($b -ge 97 -and $b -le 102))) {
+                        $isHex = $false; break
+                    }
+                }
+                if ($isHex) {
+                    Write-Host "WARNING: DE#52 detected as 16-char ASCII Hex. Adjusting length to 16 to prevent parsing shift." -ForegroundColor Yellow
+                    $len = 16
+                }
+            }
+
+            if ($len -eq 16 -and $f -eq 52) {
+                $val = [System.Text.Encoding]::ASCII.GetString($bytes, $pos, 16)
+            } else {
+                $val = [BitConverter]::ToString($bytes, $pos, $len).Replace("-","")
+            }
+            
+            Write-Host ("DE#{0,-3} ({1,-25}): {2}  (length {3})" -f $f, $name, $val, $len)
             $pos += $len
         }
         elseif ($fixedFields.ContainsKey($f)) {

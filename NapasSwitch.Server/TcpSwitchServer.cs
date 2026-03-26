@@ -456,7 +456,7 @@ public class TcpSwitchServer : IDisposable
 
         private static void PrintRawMessage(byte[] messageBytes, string sessionId)
         {
-            string hexString = BitConverter.ToString(messageBytes).Replace("-", " ");
+            string hexString = BitConverter.ToString(messageBytes).Replace("-", "");
             string asciiString = new string(messageBytes.Select(b => b >= 32 && b <= 126 ? (char)b : '.').ToArray());
             MessageLogger.LogRaw(sessionId, hexString, asciiString);
         }

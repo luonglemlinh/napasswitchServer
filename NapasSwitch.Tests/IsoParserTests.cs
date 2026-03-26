@@ -137,4 +137,28 @@ public class IsoParserTests
         var msg = new IsoMessage();
         Assert.Throws<ArgumentException>(() => _parser.Build(msg));
     }
+
+    [Fact]
+    public void Parse_ShouldHandleAsciiHexPinBlock_WithoutShiftingSubsequentFields()
+    {
+        // 0200 message with DE#52 (16 chars ASCII Hex) and DE#63 (LLLVAR)
+        // This simulates an acquirer sending the PIN block in a non-standard length.
+        
+        var mtiBytes = System.Text.Encoding.ASCII.GetBytes("0200");
+        var bitmapBytes = new byte[] { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x10, 0x02 }; // bits 52 and 63
+        var de52Bytes = System.Text.Encoding.ASCII.GetBytes("0612523FEBB9BADA"); // 16 bytes ASCII
+        var de63Bytes = System.Text.Encoding.ASCII.GetBytes("011TRN12345678");     // LLLVAR(11) + content
+        
+        var message = new List<byte>();
+        message.AddRange(mtiBytes);
+        message.AddRange(bitmapBytes);
+        message.AddRange(de52Bytes);
+        message.AddRange(de63Bytes);
+        
+        var parsed = _parser.Parse(message.ToArray());
+        
+        Assert.Equal("0200", parsed.MessageType);
+        Assert.Equal("0612523FEBB9BADA", parsed.GetField(52));
+        Assert.Equal("TRN12345678", parsed.GetField(63));
+    }
 }

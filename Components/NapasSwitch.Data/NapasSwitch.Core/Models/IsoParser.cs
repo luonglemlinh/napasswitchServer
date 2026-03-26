@@ -165,11 +165,15 @@ public class IsoParser
     /// </summary>
     private bool IsHexBitmap(byte[] data, int offset)
     {
-        if (offset + 16 > data.Length)
-            return false; // Not enough bytes for HEX format, assume binary
+        return IsHexSegment(data, offset, 16);
+    }
+
+    private bool IsHexSegment(byte[] data, int offset, int length)
+    {
+        if (offset + length > data.Length)
+            return false;
         
-        // Check if all 16 bytes are valid HEX ASCII characters
-        for (int i = 0; i < 16; i++)
+        for (int i = 0; i < length; i++)
         {
             byte b = data[offset + i];
             bool isHexChar = (b >= '0' && b <= '9') || 
@@ -226,6 +230,17 @@ public class IsoParser
     private string ExtractFixedField(byte[] data, IsoFieldDefinition fieldDef, ref int offset)
     {
         int length = fieldDef.FixedLength!.Value;
+
+        // [NAPAS-FIX] Some acquirers incorrectly send binary fields (like DE#52 PIN Block) 
+        // as 16 bytes of ASCII Hex instead of 8 raw bytes.
+        // We detect this to prevent "shifting" subsequent fields.
+        if (fieldDef.IsBinary && length == 8 && IsHexSegment(data, offset, 16))
+        {
+            string hexValue = System.Text.Encoding.ASCII.GetString(data, offset, 16);
+            offset += 16;
+            return hexValue;
+        }
+
         if (offset + length > data.Length)
             throw new ArgumentException($"Insufficient data for fixed field DE#{fieldDef.FieldNumber}. Expected {length} bytes at offset {offset}, but only {data.Length - offset} bytes remain.");
 
