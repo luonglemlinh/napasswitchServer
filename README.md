@@ -567,7 +567,18 @@ Connect a test client (e.g., a "blackbox" simulator) to the Acquirer port:
 - **Port**: `****` (default Acquirer port)
 - **Protocol**: Raw TCP with 4-byte ASCII length header + ISO 8583 binary payload
 
----
+### Utilities: Decoding ISO Messages
+
+The `decode_iso.ps1` script is a PowerShell utility provided to manually unpack and read a raw ISO 8583 hexadecimal string. It is extremely useful for debugging parsing errors.
+
+**How to use:**
+1. Open `decode_iso.ps1` in your editor.
+2. Replace the hardcoded string on **Line 1** (`$hex = "..."`) with your own captured raw hex payload.
+3. Save the file and run it from your PowerShell terminal:
+   ```powershell
+   .\decode_iso.ps1
+   ```
+The script will cleanly decode the MTI, the Bitmap, and print out every Data Element (field) according to NAPAS formatting rules.
 
 ## Security
 
